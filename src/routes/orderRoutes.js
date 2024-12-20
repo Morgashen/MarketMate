@@ -4,7 +4,7 @@ const {
   protect,
   admin,
   setUser,
-} = require("../middleware/authMiddleware");
+} = require("../middlewares/authMiddleware");
 const {
   createOrder,
   getOrderByOrderId,

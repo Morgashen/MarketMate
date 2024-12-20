@@ -8,18 +8,18 @@ const redisClient = require("../utils/redisClient");
  *
  */
 const setUser = asyncHandler(async (request, response, next) => {
-    const token = request.cookies["Z-Token"];
+  const token = request.cookies["Z-Token"];
 
-    if (token) {
-        const userDetails = await redisClient.getValue(token);
-        if (!userDetails) {
-            console.log("Invalid token, user details not found.");
-        } else {
-            request.user = JSON.parse(userDetails);
-            console.log("Middleware", request.user);
-        }
+  if (token) {
+    const userDetails = await redisClient.getValue(token);
+    if (!userDetails) {
+      console.log("Invalid token, user details not found.");
+    } else {
+      request.user = JSON.parse(userDetails);
+      console.log("Middleware", request.user);
     }
-    next();
+  }
+  next();
 });
 
 /**
@@ -27,15 +27,15 @@ const setUser = asyncHandler(async (request, response, next) => {
  * - Ensures that only authenticated users are allowed
  */
 const protect = (request, response, next) => {
-    if (!request.user) {
-      return response.status(401).json({
-        success: false,
-        message: "Unauthorized. You are not logged in ",
-        result: "",
-      });
-    }
-    next();
-  };
+  if (!request.user) {
+    return response.status(401).json({
+      success: false,
+      message: "Unauthorized. You are not logged in ",
+      result: "",
+    });
+  }
+  next();
+};
 
 
 /**
@@ -43,7 +43,7 @@ const protect = (request, response, next) => {
  * - Ensures that only Admin users are allowed.
  */
 const admin = (request, response, next) => {
-console.log("Admin middleware", request.user)
+  console.log("Admin middleware", request.user)
   if (request.user && request.user.isAdmin) {
     next();
   } else {
