@@ -21,7 +21,7 @@ class Server {
   constructor() {
     this.app = express();
     this.port = process.env.PORT || 3000;
-    
+
     this.initializeLogger();
     this.initializeMiddlewares();
     this.connectDatabase();
@@ -46,10 +46,10 @@ class Server {
         // Write all logs with importance level of `info` or less to `combined.log`
         new winston.transports.File({ filename: 'combined.log' }),
         // Log to console if not in production
-        ...(process.env.NODE_ENV !== 'production' 
+        ...(process.env.NODE_ENV !== 'production'
           ? [new winston.transports.Console({
-              format: winston.format.simple()
-            })] 
+            format: winston.format.simple()
+          })]
           : [])
       ]
     });
@@ -66,8 +66,8 @@ class Server {
 
     // Improved CORS configuration
     this.app.use(cors({
-      origin: process.env.CORS_ORIGIN 
-        ? process.env.CORS_ORIGIN.split(',') 
+      origin: process.env.CORS_ORIGIN
+        ? process.env.CORS_ORIGIN.split(',')
         : '*', // Support multiple origins
       methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
       allowedHeaders: ['Content-Type', 'Authorization'],
@@ -99,11 +99,11 @@ class Server {
     }));
 
     // Parsing middlewares with increased security
-    this.app.use(express.json({ 
+    this.app.use(express.json({
       limit: '10mb',
       strict: true // Only accept objects and arrays
     }));
-    this.app.use(express.urlencoded({ 
+    this.app.use(express.urlencoded({
       extended: false, // Use simpler parsing
       limit: '10mb'
     }));
@@ -224,10 +224,10 @@ class Server {
     // Improved graceful shutdown
     const shutdown = (signal) => {
       this.logger.info(`${signal} received. Starting graceful shutdown`);
-      
+
       server.close(() => {
         this.logger.info('HTTP server closed');
-        
+
         // Close database connection
         mongoose.connection.close(false, () => {
           this.logger.info('MongoDB connection closed');

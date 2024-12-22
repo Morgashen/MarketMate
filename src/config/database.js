@@ -3,161 +3,207 @@ const logger = require('../utils/logger');
 
 class DatabaseConnection {
   constructor() {
+    // Initialize with more detailed connection tracking
     this.connection = null;
     this.retryAttempts = 0;
     this.maxRetryAttempts = 5;
-    this.retryInterval = 5000; // 5 seconds
+    this.baseRetryInterval = 5000; // Base retry interval for exponential backoff
     this.isConnecting = false;
     this.connectionStats = {
       lastConnectedAt: null,
+      lastDisconnectedAt: null,  // New field to track disconnection time
       disconnectionCount: 0,
       reconnectionAttempts: 0,
-      currentState: 'disconnected'
+      currentState: 'disconnected',
+      lastError: null,  // Track the last error for better diagnostics
+      performance: {    // New section for performance metrics
+        averageResponseTime: 0,
+        peakConnections: 0,
+        queryCount: 0
+      }
     };
+
+    // Bind methods to preserve context
+    this.handleConnectionError = this.handleConnectionError.bind(this);
+    this.handleDisconnection = this.handleDisconnection.bind(this);
   }
 
   async connect() {
     if (this.isConnecting) {
-      logger.warn('Connection attempt already in progress');
+      logger.warn('Connection attempt already in progress', {
+        currentState: this.connectionStats.currentState,
+        retryAttempt: this.retryAttempts
+      });
       return;
     }
 
     this.isConnecting = true;
 
     try {
-      if (!process.env.MONGODB_URI) {
-        throw new Error('MongoDB URI is not defined in environment variables');
-      }
+      // Validate environment configuration
+      this.validateConfig();
 
-      const options = {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        maxPoolSize: parseInt(process.env.MONGO_MAX_POOL_SIZE, 10) || 10,
-        minPoolSize: parseInt(process.env.MONGO_MIN_POOL_SIZE, 10) || 2,
-        socketTimeoutMS: 45000,
-        connectTimeoutMS: 10000,
-        serverSelectionTimeoutMS: 10000,
-        heartbeatFrequencyMS: 10000,
-        retryWrites: true,
-        family: 4,
-        autoIndex: process.env.NODE_ENV !== 'production',
-        serverApi: {
-          version: '1',
-          strict: true,
-          deprecationErrors: true
-        }
-      };
+      const options = this.getConnectionOptions();
 
+      // Attempt connection with enhanced monitoring
+      const startTime = Date.now();
       this.connection = await mongoose.connect(process.env.MONGODB_URI, options);
-      this.setupConnectionMonitoring();
-      this.connectionStats.lastConnectedAt = new Date();
-      this.connectionStats.currentState = 'connected';
-      this.retryAttempts = 0;
+      const connectionTime = Date.now() - startTime;
 
-      logger.info('Successfully connected to MongoDB');
+      // Update performance metrics
+      this.updatePerformanceMetrics('connectionTime', connectionTime);
+
+      this.setupConnectionMonitoring();
+      this.updateConnectionStats('connected');
+
+      logger.info('Successfully connected to MongoDB', {
+        connectionTime,
+        host: mongoose.connection.host,
+        database: mongoose.connection.name
+      });
+
       return this.connection;
     } catch (error) {
-      this.handleConnectionError(error);
+      await this.handleConnectionError(error);
     } finally {
       this.isConnecting = false;
     }
   }
 
-  setupConnectionMonitoring() {
-    mongoose.connection.on('connected', () => {
-      this.connectionStats.currentState = 'connected';
-      this.connectionStats.lastConnectedAt = new Date();
-      logger.info('Mongoose connected to database');
-      this.emitConnectionStats();
-    });
+  validateConfig() {
+    if (!process.env.MONGODB_URI) {
+      throw new Error('MongoDB URI is not defined in environment variables');
+    }
 
-    mongoose.connection.on('error', (err) => {
-      this.connectionStats.currentState = 'error';
-      logger.error('Mongoose connection error:', { error: err.message, stack: err.stack });
-      this.handleConnectionError(err);
-    });
+    // Validate other critical configuration parameters
+    const requiredEnvVars = ['NODE_ENV', 'MONGO_MAX_POOL_SIZE'];
+    const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
-    mongoose.connection.on('disconnected', () => {
-      this.connectionStats.currentState = 'disconnected';
-      this.connectionStats.disconnectionCount++;
-      logger.warn('Mongoose disconnected from database');
-      this.handleDisconnection();
-    });
-
-    // Monitor for specific collection errors
-    mongoose.connection.on('fullsetup', () => {
-      logger.info('All replicas are connected');
-    });
-
-    // Monitor server heartbeat
-    if (mongoose.connection.db) {
-      setInterval(() => {
-        this.checkDatabaseHealth();
-      }, 30000); // Check every 30 seconds
+    if (missingVars.length > 0) {
+      throw new Error(`Missing required environment variables: ${missingVars.join(', ')}`);
     }
   }
 
+  getConnectionOptions() {
+    // Enhanced connection options with better defaults and validation
+    return {
+      maxPoolSize: this.validatePoolSize(process.env.MONGO_MAX_POOL_SIZE, 10),
+      minPoolSize: this.validatePoolSize(process.env.MONGO_MIN_POOL_SIZE, 2),
+      socketTimeoutMS: 45000,
+      connectTimeoutMS: 10000,
+      serverSelectionTimeoutMS: 10000,
+      heartbeatFrequencyMS: 10000,
+      retryWrites: true,
+      family: 4,
+      autoIndex: process.env.NODE_ENV !== 'production',
+      serverApi: {
+        version: '1',
+        strict: true,
+        deprecationErrors: true
+      },
+      // Add connection monitoring plugins
+      monitorCommands: true,
+      maxIdleTimeMS: 30000  // Close idle connections after 30 seconds
+    };
+  }
+
+  validatePoolSize(value, defaultValue) {
+    const poolSize = parseInt(value, 10);
+    if (isNaN(poolSize) || poolSize < 1) {
+      logger.warn(`Invalid pool size: ${value}, using default: ${defaultValue}`);
+      return defaultValue;
+    }
+    return poolSize;
+  }
+
   async handleConnectionError(error) {
+    // Calculate exponential backoff time
+    const backoffTime = this.calculateBackoffTime();
+
+    this.connectionStats.lastError = {
+      message: error.message,
+      code: error.code,
+      timestamp: new Date()
+    };
+
     logger.error('Database connection error:', {
       message: error.message,
+      code: error.code,
       stack: error.stack,
       retryAttempt: this.retryAttempts + 1,
-      maxRetries: this.maxRetryAttempts
+      maxRetries: this.maxRetryAttempts,
+      backoffTime
     });
 
     if (this.retryAttempts < this.maxRetryAttempts) {
       this.retryAttempts++;
       this.connectionStats.reconnectionAttempts++;
 
-      logger.info(`Retrying connection attempt ${this.retryAttempts} of ${this.maxRetryAttempts} in ${this.retryInterval / 1000} seconds`);
+      logger.info(`Retrying connection in ${backoffTime / 1000} seconds`, {
+        attempt: this.retryAttempts,
+        maxAttempts: this.maxRetryAttempts
+      });
 
-      setTimeout(async () => {
-        await this.connect();
-      }, this.retryInterval);
+      await new Promise(resolve => setTimeout(resolve, backoffTime));
+      return this.connect();
     } else {
-      logger.error('Max retry attempts reached. Please check your database configuration.');
-      throw new Error('Failed to connect to database after maximum retry attempts');
+      const finalError = new Error('Failed to connect to database after maximum retry attempts');
+      finalError.originalError = error;
+      throw finalError;
     }
   }
 
-  handleDisconnection() {
-    if (this.connectionStats.currentState !== 'reconnecting') {
-      this.connectionStats.currentState = 'reconnecting';
-      this.connect().catch(error => {
-        logger.error('Failed to reconnect:', error);
-      });
-    }
+  calculateBackoffTime() {
+    // Implement exponential backoff with jitter
+    const jitter = Math.random() * 1000;
+    return Math.min(
+      this.baseRetryInterval * Math.pow(2, this.retryAttempts) + jitter,
+      30000 // Maximum backoff of 30 seconds
+    );
   }
 
   async checkDatabaseHealth() {
     try {
-      if (this.connection && mongoose.connection.readyState === 1) {
-        const adminDb = this.connection.connection.db.admin();
-        const serverStatus = await adminDb.serverStatus();
-
-        // Log important metrics
-        logger.info('Database health check:', {
-          connections: serverStatus.connections,
-          activeConnections: serverStatus.globalLock?.activeClients?.total || 0,
-          memory: serverStatus.mem,
-          opCounters: serverStatus.opcounters
-        });
+      if (!this.isConnected()) {
+        return;
       }
-    } catch (error) {
-      logger.error('Health check failed:', error);
-    }
-  }
 
-  async disconnect() {
-    try {
-      if (this.connection) {
-        await mongoose.connection.close();
-        this.connection = null;
-        this.connectionStats.currentState = 'disconnected';
-        logger.info('Database connection closed successfully');
-      }
+      const startTime = Date.now();
+      const adminDb = this.connection.connection.db.admin();
+      const [serverStatus, dbStats] = await Promise.all([
+        adminDb.serverStatus(),
+        this.connection.connection.db.stats()
+      ]);
+
+      const responseTime = Date.now() - startTime;
+
+      // Update performance metrics
+      this.updatePerformanceMetrics('responseTime', responseTime);
+
+      const healthMetrics = {
+        responseTime,
+        connections: {
+          current: serverStatus.connections.current,
+          available: serverStatus.connections.available,
+          totalCreated: serverStatus.connections.totalCreated
+        },
+        memory: {
+          resident: serverStatus.mem.resident,
+          virtual: serverStatus.mem.virtual,
+          mapped: serverStatus.mem.mapped
+        },
+        storage: {
+          dataSize: dbStats.dataSize,
+          storageSize: dbStats.storageSize,
+          indexes: dbStats.indexes
+        },
+        operations: serverStatus.opcounters
+      };
+
+      logger.info('Database health metrics:', healthMetrics);
+      return healthMetrics;
     } catch (error) {
-      logger.error('Error closing database connection:', {
+      logger.error('Health check failed:', {
         message: error.message,
         stack: error.stack
       });
@@ -165,28 +211,23 @@ class DatabaseConnection {
     }
   }
 
-  getConnection() {
-    return this.connection;
-  }
+  updatePerformanceMetrics(metric, value) {
+    // Exponential moving average for continuous metrics
+    const alpha = 0.2; // Smoothing factor
 
-  getConnectionStats() {
-    return {
-      ...this.connectionStats,
-      readyState: mongoose.connection.readyState,
-      collections: mongoose.connection.collections ? Object.keys(mongoose.connection.collections).length : 0,
-      models: mongoose.connection.models ? Object.keys(mongoose.connection.models).length : 0
-    };
-  }
-
-  emitConnectionStats() {
-    const stats = this.getConnectionStats();
-    logger.info('Connection stats:', stats);
-    return stats;
-  }
-
-  // Utility method to check if connection is ready
-  isConnected() {
-    return mongoose.connection.readyState === 1;
+    switch (metric) {
+      case 'responseTime':
+        this.connectionStats.performance.averageResponseTime =
+          alpha * value + (1 - alpha) * this.connectionStats.performance.averageResponseTime;
+        break;
+      case 'connections':
+        this.connectionStats.performance.peakConnections =
+          Math.max(value, this.connectionStats.performance.peakConnections);
+        break;
+      case 'queryCount':
+        this.connectionStats.performance.queryCount += value;
+        break;
+    }
   }
 }
 
