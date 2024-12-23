@@ -1,22 +1,24 @@
 const mongoose = require('mongoose');
+const EventEmitter = require('events');
 const logger = require('../utils/logger');
 
-class DatabaseConnection {
+class DatabaseConnection extends EventEmitter {
   constructor() {
-    // Initialize with more detailed connection tracking
+    super(); // Initialize EventEmitter
+
     this.connection = null;
     this.retryAttempts = 0;
     this.maxRetryAttempts = 5;
-    this.baseRetryInterval = 5000; // Base retry interval for exponential backoff
+    this.baseRetryInterval = 5000; // Base retry interval in milliseconds
     this.isConnecting = false;
     this.connectionStats = {
       lastConnectedAt: null,
-      lastDisconnectedAt: null,  // New field to track disconnection time
+      lastDisconnectedAt: null,
       disconnectionCount: 0,
       reconnectionAttempts: 0,
       currentState: 'disconnected',
-      lastError: null,  // Track the last error for better diagnostics
-      performance: {    // New section for performance metrics
+      lastError: null,
+      performance: {
         averageResponseTime: 0,
         peakConnections: 0,
         queryCount: 0
@@ -45,13 +47,13 @@ class DatabaseConnection {
 
       const options = this.getConnectionOptions();
 
-      // Attempt connection with enhanced monitoring
+      // Attempt connection
       const startTime = Date.now();
-      this.connection = await mongoose.connect(process.env.MONGODB_URI, options);
+      this.connection = await mongoose.connect(process.env.ATLAS_URI, options);
       const connectionTime = Date.now() - startTime;
 
       // Update performance metrics
-      this.updatePerformanceMetrics('connectionTime', connectionTime);
+      this.updatePerformanceMetrics('responseTime', connectionTime);
 
       this.setupConnectionMonitoring();
       this.updateConnectionStats('connected');
@@ -62,7 +64,7 @@ class DatabaseConnection {
         database: mongoose.connection.name
       });
 
-      return this.connection;
+      this.emit('connected'); // Emit connected event
     } catch (error) {
       await this.handleConnectionError(error);
     } finally {
@@ -71,11 +73,10 @@ class DatabaseConnection {
   }
 
   validateConfig() {
-    if (!process.env.MONGODB_URI) {
+    if (!process.env.ATLAS_URI) {
       throw new Error('MongoDB URI is not defined in environment variables');
     }
 
-    // Validate other critical configuration parameters
     const requiredEnvVars = ['NODE_ENV', 'MONGO_MAX_POOL_SIZE'];
     const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
 
@@ -85,7 +86,6 @@ class DatabaseConnection {
   }
 
   getConnectionOptions() {
-    // Enhanced connection options with better defaults and validation
     return {
       maxPoolSize: this.validatePoolSize(process.env.MONGO_MAX_POOL_SIZE, 10),
       minPoolSize: this.validatePoolSize(process.env.MONGO_MIN_POOL_SIZE, 2),
@@ -101,9 +101,8 @@ class DatabaseConnection {
         strict: true,
         deprecationErrors: true
       },
-      // Add connection monitoring plugins
       monitorCommands: true,
-      maxIdleTimeMS: 30000  // Close idle connections after 30 seconds
+      maxIdleTimeMS: 30000
     };
   }
 
@@ -117,7 +116,6 @@ class DatabaseConnection {
   }
 
   async handleConnectionError(error) {
-    // Calculate exponential backoff time
     const backoffTime = this.calculateBackoffTime();
 
     this.connectionStats.lastError = {
@@ -149,23 +147,45 @@ class DatabaseConnection {
     } else {
       const finalError = new Error('Failed to connect to database after maximum retry attempts');
       finalError.originalError = error;
+      this.emit('error', finalError); // Emit error event
       throw finalError;
     }
   }
 
   calculateBackoffTime() {
-    // Implement exponential backoff with jitter
     const jitter = Math.random() * 1000;
     return Math.min(
       this.baseRetryInterval * Math.pow(2, this.retryAttempts) + jitter,
-      30000 // Maximum backoff of 30 seconds
+      30000
     );
+  }
+
+  setupConnectionMonitoring() {
+    mongoose.connection.on('disconnected', this.handleDisconnection);
+    mongoose.connection.on('error', this.handleConnectionError);
+  }
+
+  handleDisconnection() {
+    this.connectionStats.currentState = 'disconnected';
+    this.connectionStats.lastDisconnectedAt = new Date();
+    this.connectionStats.disconnectionCount++;
+    this.emit('disconnected'); // Emit disconnected event
+
+    logger.warn('MongoDB connection lost');
+  }
+
+  updateConnectionStats(state) {
+    this.connectionStats.currentState = state;
+    if (state === 'connected') {
+      this.connectionStats.lastConnectedAt = new Date();
+      this.retryAttempts = 0;
+    }
   }
 
   async checkDatabaseHealth() {
     try {
       if (!this.isConnected()) {
-        return;
+        throw new Error('Not connected to the database');
       }
 
       const startTime = Date.now();
@@ -182,16 +202,8 @@ class DatabaseConnection {
 
       const healthMetrics = {
         responseTime,
-        connections: {
-          current: serverStatus.connections.current,
-          available: serverStatus.connections.available,
-          totalCreated: serverStatus.connections.totalCreated
-        },
-        memory: {
-          resident: serverStatus.mem.resident,
-          virtual: serverStatus.mem.virtual,
-          mapped: serverStatus.mem.mapped
-        },
+        connections: serverStatus.connections,
+        memory: serverStatus.mem,
         storage: {
           dataSize: dbStats.dataSize,
           storageSize: dbStats.storageSize,
@@ -203,26 +215,22 @@ class DatabaseConnection {
       logger.info('Database health metrics:', healthMetrics);
       return healthMetrics;
     } catch (error) {
-      logger.error('Health check failed:', {
-        message: error.message,
-        stack: error.stack
-      });
+      logger.error('Health check failed:', { message: error.message });
       throw error;
     }
   }
 
+  isConnected() {
+    return mongoose.connection.readyState === 1;
+  }
+
   updatePerformanceMetrics(metric, value) {
-    // Exponential moving average for continuous metrics
-    const alpha = 0.2; // Smoothing factor
+    const alpha = 0.2;
 
     switch (metric) {
       case 'responseTime':
         this.connectionStats.performance.averageResponseTime =
           alpha * value + (1 - alpha) * this.connectionStats.performance.averageResponseTime;
-        break;
-      case 'connections':
-        this.connectionStats.performance.peakConnections =
-          Math.max(value, this.connectionStats.performance.peakConnections);
         break;
       case 'queryCount':
         this.connectionStats.performance.queryCount += value;

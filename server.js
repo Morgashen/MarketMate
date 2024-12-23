@@ -5,8 +5,11 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const winston = require('winston');
+require('winston-daily-rotate-file');
 const expressWinston = require('express-winston');
 const rateLimit = require('express-rate-limit');
+const { v4: uuidv4 } = require('uuid');
+const domain = require('domain');
 
 // Import route modules
 const authRoutes = require('./src/routes/authRoutes');
@@ -22,17 +25,35 @@ class Server {
     this.app = express();
     this.port = process.env.PORT || 3000;
 
+    // Initialize core components in the correct order
     this.initializeLogger();
     this.initializeMiddlewares();
+    this.initializeSecurity();
     this.connectDatabase();
     this.initializeRoutes();
     this.initializeErrorHandling();
   }
 
   initializeLogger() {
-    // Advanced logging with Winston
+    // Create rotating file transport for error logs
+    const errorFileRotateTransport = new winston.transports.DailyRotateFile({
+      filename: 'logs/error-%DATE%.log',
+      datePattern: 'YYYY-MM-DD',
+      maxSize: '20m',
+      maxFiles: '14d',
+      level: 'error'
+    });
+
+    // Create rotating file transport for combined logs
+    const combinedFileRotateTransport = new winston.transports.DailyRotateFile({
+      filename: 'logs/combined-%DATE%.log',
+      datePattern: 'YYYY-MM-DD',
+      maxSize: '20m',
+      maxFiles: '14d'
+    });
+
     this.logger = winston.createLogger({
-      level: 'info',
+      level: process.env.LOG_LEVEL || 'info',
       format: winston.format.combine(
         winston.format.timestamp(),
         winston.format.errors({ stack: true }),
@@ -41,14 +62,14 @@ class Server {
       ),
       defaultMeta: { service: 'market-mate-api' },
       transports: [
-        // Write all logs with importance level of `error` or less to `error.log`
-        new winston.transports.File({ filename: 'error.log', level: 'error' }),
-        // Write all logs with importance level of `info` or less to `combined.log`
-        new winston.transports.File({ filename: 'combined.log' }),
-        // Log to console if not in production
+        errorFileRotateTransport,
+        combinedFileRotateTransport,
         ...(process.env.NODE_ENV !== 'production'
           ? [new winston.transports.Console({
-            format: winston.format.simple()
+            format: winston.format.combine(
+              winston.format.colorize(),
+              winston.format.simple()
+            )
           })]
           : [])
       ]
@@ -56,33 +77,100 @@ class Server {
   }
 
   initializeMiddlewares() {
-    // Security middlewares
-    this.app.use(helmet({
-      // Disable X-Powered-By header for additional security
-      hidePoweredBy: true,
-      // More granular CSP if needed
-      contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false
-    }));
+    // Add request ID tracking
+    this.app.use((req, res, next) => {
+      req.id = uuidv4();
+      res.setHeader('X-Request-ID', req.id);
+      next();
+    });
 
-    // Improved CORS configuration
-    this.app.use(cors({
-      origin: process.env.CORS_ORIGIN
-        ? process.env.CORS_ORIGIN.split(',')
-        : '*', // Support multiple origins
-      methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
-      credentials: true, // Allow credentials if needed
-      maxAge: 86400 // Preflight request caching
-    }));
+    // Parse JSON and URL-encoded bodies
+    this.app.use(
+      express.json({
+        limit: '10mb',
+        strict: true
+      })
+    );
+    this.app.use(
+      express.urlencoded({
+        extended: false,
+        limit: '10mb'
+      })
+    );
 
-    // Advanced rate limiting
+    // Add response time tracking
+    this.app.use((req, res, next) => {
+      res.locals.startTime = Date.now();
+      next();
+    });
+
+    // Configure compression
+    this.app.use(
+      compression({
+        level: 6,
+        threshold: 10 * 1024,
+        filter: (req, res) => {
+          if (req.headers['x-no-compression']) {
+            return false;
+          }
+          return compression.filter(req, res);
+        }
+      })
+    );
+
+    // Configure request logging
+    this.app.use(
+      expressWinston.logger({
+        winstonInstance: this.logger,
+        meta: true,
+        colorize: false,
+        requestWhitelist: ['headers', 'query', 'body'],
+        responseWhitelist: ['body'],
+        dynamicMeta: (req, res) => {
+          return {
+            requestId: req.id,
+            responseTime: Date.now() - res.locals.startTime
+          };
+        }
+      })
+    );
+  }
+
+  initializeSecurity() {
+    // Configure security headers
+    this.app.use(
+      helmet({
+        hidePoweredBy: true,
+        contentSecurityPolicy: process.env.NODE_ENV === 'production' ? undefined : false,
+        crossOriginEmbedderPolicy: process.env.NODE_ENV === 'production'
+      })
+    );
+
+    // Configure CORS
+    this.app.use(
+      cors({
+        origin: process.env.CORS_ORIGIN
+          ? process.env.CORS_ORIGIN.split(',')
+          : '*',
+        methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+        allowedHeaders: ['Content-Type', 'Authorization'],
+        credentials: true,
+        maxAge: 86400
+      })
+    );
+
+    // Configure rate limiting
     const limiter = rateLimit({
-      windowMs: 15 * 60 * 1000, // 15 minutes
-      max: 100, // limit each IP to 100 requests per windowMs
+      windowMs: 15 * 60 * 1000,
+      max: process.env.RATE_LIMIT_MAX || 100,
       message: 'Too many requests, please try again later',
-      standardHeaders: true, // Return rate limit info in the `RateLimit-*` headers
-      legacyHeaders: false, // Disable the `X-RateLimit-*` headers
+      standardHeaders: true,
+      legacyHeaders: false,
       handler: (req, res) => {
+        this.logger.warn('Rate limit exceeded', {
+          requestId: req.id,
+          ip: req.ip
+        });
         res.status(429).json({
           error: 'Too many requests, please try again later',
           status: 429
@@ -90,56 +178,33 @@ class Server {
       }
     });
     this.app.use(limiter);
-
-    // Logging middleware
-    this.app.use(expressWinston.logger({
-      winstonInstance: this.logger,
-      meta: true,
-      colorize: false
-    }));
-
-    // Parsing middlewares with increased security
-    this.app.use(express.json({
-      limit: '10mb',
-      strict: true // Only accept objects and arrays
-    }));
-    this.app.use(express.urlencoded({
-      extended: false, // Use simpler parsing
-      limit: '10mb'
-    }));
-
-    // Compression with threshold
-    this.app.use(compression({
-      level: 6, // Compression level
-      threshold: 10 * 1024, // Only compress files larger than 10kb
-      filter: (req, res) => {
-        if (req.headers['x-no-compression']) {
-          // Don't compress responses with this header
-          return false;
-        }
-        // Fallback to standard filter function
-        return compression.filter(req, res);
-      }
-    }));
-
-    // Health check middleware
-    this.app.use((req, res, next) => {
-      res.locals.startTime = Date.now();
-      next();
-    });
   }
 
   async connectDatabase() {
+    const uri = process.env.ATLAS_URI;
+
+    if (!uri) {
+      this.logger.error('MongoDB connection URI is not defined in environment variables.');
+      process.exit(1);
+    }
+
     try {
-      // Use connection pooling and more robust connection options
-      await mongoose.connect(process.env.MONGODB_URI, {
-        useNewUrlParser: true,
-        useUnifiedTopology: true,
-        serverSelectionTimeoutMS: 5000, // Timeout after 5s instead of 30s
-        socketTimeoutMS: 45000, // Close sockets after 45 seconds of inactivity
-        maxPoolSize: 10, // Maintain up to 10 socket connections
-        minPoolSize: 2,  // Keep at least 2 socket connections
+      await mongoose.connect(uri, {
+        serverSelectionTimeoutMS: 5000,
+        socketTimeoutMS: 45000,
+        maxPoolSize: 10,
+        minPoolSize: 2
       });
+
+      // Set up MongoDB connection error handlers
+      mongoose.connection.on('error', (error) => {
+        this.logger.error('MongoDB connection error:', error);
+      });
+
+      mongoose.connection.on('disconnected', () => {
+        this.logger.warn('MongoDB disconnected');
+      });
+
       this.logger.info('MongoDB connected successfully');
     } catch (error) {
       this.logger.error('MongoDB connection error:', error);
@@ -148,28 +213,39 @@ class Server {
   }
 
   initializeRoutes() {
-    // Performance monitoring endpoint
+    // Health check endpoint with enhanced metrics
     this.app.get('/health', (req, res) => {
       const uptime = process.uptime();
       const memoryUsage = process.memoryUsage();
-      res.json({
+      const healthCheck = {
         status: 'healthy',
-        uptime: `${Math.floor(uptime)} seconds`,
-        memoryUsage: {
-          rss: memoryUsage.rss,
-          heapTotal: memoryUsage.heapTotal,
-          heapUsed: memoryUsage.heapUsed,
-          external: memoryUsage.external
+        uptime: {
+          seconds: Math.floor(uptime),
+          formatted: this.formatUptime(uptime)
         },
+        memoryUsage: {
+          rss: `${Math.round(memoryUsage.rss / 1024 / 1024)}MB`,
+          heapTotal: `${Math.round(memoryUsage.heapTotal / 1024 / 1024)}MB`,
+          heapUsed: `${Math.round(memoryUsage.heapUsed / 1024 / 1024)}MB`,
+          external: `${Math.round(memoryUsage.external / 1024 / 1024)}MB`,
+          percentUsed: `${Math.round((memoryUsage.heapUsed / memoryUsage.heapTotal) * 100)}%`
+        },
+        database: {
+          status: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+          hosts: mongoose.connection.hosts?.map(host => host.name) || []
+        },
+        environment: process.env.NODE_ENV || 'development',
         timestamp: new Date().toISOString()
-      });
+      };
+      res.json(healthCheck);
     });
 
-    // Base route
+    // Welcome endpoint
     this.app.get('/', (req, res) => {
       res.json({
         message: 'Welcome to MarketMate E-commerce API',
-        version: '1.0.0'
+        version: process.env.npm_package_version || '1.0.0',
+        documentation: process.env.API_DOCS_URL || '/api-docs'
       });
     });
 
@@ -181,72 +257,132 @@ class Server {
   }
 
   initializeErrorHandling() {
-    // Logging for unhandled rejections and exceptions
+    // Domain-level error handling
+    this.app.use((req, res, next) => {
+      const requestDomain = domain.create();
+      requestDomain.add(req);
+      requestDomain.add(res);
+
+      requestDomain.on('error', (err) => {
+        this.logger.error('Domain error caught', {
+          error: err,
+          requestId: req.id
+        });
+
+        try {
+          // Failsafe shutdown in 30 seconds
+          setTimeout(() => {
+            process.exit(1);
+          }, 30000);
+
+          // Close server
+          if (this.server) {
+            this.server.close();
+          }
+
+          // Handle the error
+          errorHandler(err, req, res, next);
+        } catch (error) {
+          this.logger.error('Unable to handle domain error', error);
+          process.exit(1);
+        }
+      });
+
+      requestDomain.run(next);
+    });
+
+    // Handle 404 errors
+    this.app.use((req, res) => {
+      res.status(404).json({
+        message: 'Endpoint not found',
+        status: 404,
+        path: req.path
+      });
+    });
+
+    // Global error handler
+    this.app.use((err, req, res, next) => {
+      const responseTime = Date.now() - res.locals.startTime;
+      this.logger.error('Error occurred', {
+        error: err,
+        method: req.method,
+        path: req.path,
+        requestId: req.id,
+        responseTime
+      });
+
+      errorHandler(err, req, res, next);
+    });
+
+    // Handle uncaught exceptions and rejections
     process.on('unhandledRejection', (reason, promise) => {
-      this.logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+      this.logger.error('Unhandled Rejection', {
+        reason,
+        promise
+      });
     });
 
     process.on('uncaughtException', (error) => {
       this.logger.error('Uncaught Exception:', error);
-      // Graceful shutdown
-      process.exit(1);
-    });
 
-    // 404 handler
-    this.app.use((req, res, next) => {
-      res.status(404).json({
-        message: 'Endpoint not found',
-        status: 404
-      });
-    });
-
-    // Global error handler with response time logging
-    this.app.use((err, req, res, next) => {
-      // Log response time
-      const responseTime = Date.now() - res.locals.startTime;
-      this.logger.error(`Error occurred, response time: ${responseTime}ms`, {
-        error: err,
-        method: req.method,
-        path: req.path
-      });
-
-      // Call the original error handler
-      errorHandler(err, req, res, next);
+      if (this.server) {
+        this.server.close(() => process.exit(1));
+      } else {
+        process.exit(1);
+      }
     });
   }
 
+  formatUptime(uptime) {
+    const days = Math.floor(uptime / 86400);
+    const hours = Math.floor((uptime % 86400) / 3600);
+    const minutes = Math.floor((uptime % 3600) / 60);
+    const seconds = Math.floor(uptime % 60);
+
+    const parts = [];
+    if (days > 0) parts.push(`${days}d`);
+    if (hours > 0) parts.push(`${hours}h`);
+    if (minutes > 0) parts.push(`${minutes}m`);
+    if (seconds > 0) parts.push(`${seconds}s`);
+
+    return parts.join(' ');
+  }
+
   start() {
-    const server = this.app.listen(this.port, () => {
+    this.server = this.app.listen(this.port, () => {
       this.logger.info(`Server running on port ${this.port}`);
       this.logger.info(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
 
-    // Improved graceful shutdown
-    const shutdown = (signal) => {
+    const shutdown = async (signal) => {
       this.logger.info(`${signal} received. Starting graceful shutdown`);
 
-      server.close(() => {
+      try {
+        // Close HTTP server
+        await new Promise((resolve, reject) => {
+          this.server.close((err) => {
+            if (err) reject(err);
+            else resolve();
+          });
+        });
         this.logger.info('HTTP server closed');
 
         // Close database connection
-        mongoose.connection.close(false, () => {
-          this.logger.info('MongoDB connection closed');
-          process.exit(0);
-        });
-      });
+        await mongoose.connection.close(false);
+        this.logger.info('MongoDB connection closed');
 
-      // Force close server after 10 seconds
-      setTimeout(() => {
-        this.logger.error('Could not close connections, forcefully shutting down');
+        process.exit(0);
+      } catch (error) {
+        this.logger.error('Error during shutdown:', error);
         process.exit(1);
-      }, 10000);
+      }
     };
 
-    // Listen for termination signals
+    // Handle shutdown signals
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     process.on('SIGINT', () => shutdown('SIGINT'));
 
-    return server;
+    return this.server;
   }
 }
 
