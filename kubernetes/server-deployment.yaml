@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: server
+  labels:
+    app: server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: server
+  template:
+    metadata:
+      labels:
+        app: server
+    spec:
+      containers:
+        - name: server
+          image: node:12
+          command: ["node", "server.js"]
+          ports:
+            - containerPort: 3000
+          env:
+            - name: NODE_ENV
+              value: development
+            - name: MONGODB_URI
+              value: "mongodb+srv://<username>:<password>@<cluster-name>.mongodb.net/<database>?retryWrites=true&w=majority"
+            - name: REDIS_HOST
+              value: redis
+            - name: REDIS_PORT
+              value: "6479"
+            - name: KAFKA_BROKER
+              value: kafka:9092
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: server
+spec:
+  selector:
+    app: server
+  ports:
+    - protocol: TCP
+      port: 3000
+      targetPort: 3000
+  type: LoadBalancer
