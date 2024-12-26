@@ -1,0 +1,18 @@
+{
+    "mongoURI": "mongodb+srv://<username>:<password>@<cluster-url>/<database-name>?retryWrites=true&w=majority",
+    "jwtSecret": "your_jwt_secret_key",
+    "stripeSecretKey": "your_stripe_secret_key",
+    "stripeWebhookSecret": "your_stripe_webhook_secret",
+    "port": 5000,
+    "emailConfig": {
+        "host": "smtp.example.com",
+        "port": 587,
+        "secure": false,
+        "auth": {
+            "user": "your_email@example.com",
+            "pass": "your_email_password"
+        },
+        "from": "noreply@example.com"
+    },
+    "lowStockThreshold": 10
+}

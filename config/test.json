@@ -1,0 +1,14 @@
+{
+    "mongoURI": "mongodb://localhost:27017/marketmate_test",
+    "jwtSecret": "test_secret_key",
+    "stripeSecretKey": "sk_test_your_stripe_test_key",
+    "stripeWebhookSecret": "whsec_your_webhook_secret",
+    "emailConfig": {
+        "host": "smtp.mailtrap.io",
+        "port": 2525,
+        "auth": {
+            "user": "your_mailtrap_user",
+            "pass": "your_mailtrap_password"
+        }
+    }
+}

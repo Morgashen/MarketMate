@@ -1,0 +1,177 @@
+{
+    "info": {
+        "name": "MarketMate API",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "Authentication",
+            "item": [
+                {
+                    "name": "Register User",
+                    "request": {
+                        "method": "POST",
+                        "url": "{{baseUrl}}/api/auth/register",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"Test User\",\n    \"email\": \"test@example.com\",\n    \"password\": \"password123\"\n}"
+                        }
+                    }
+                },
+                {
+                    "name": "Login User",
+                    "request": {
+                        "method": "POST",
+                        "url": "{{baseUrl}}/api/auth/login",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"email\": \"test@example.com\",\n    \"password\": \"password123\"\n}"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Products",
+            "item": [
+                {
+                    "name": "Create Product",
+                    "request": {
+                        "method": "POST",
+                        "url": "{{baseUrl}}/api/products",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "x-auth-token",
+                                "value": "{{authToken}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"name\": \"Test Product\",\n    \"description\": \"Test Description\",\n    \"price\": 99.99,\n    \"image\": \"test-image.jpg\",\n    \"category\": \"Test Category\",\n    \"stock\": 10\n}"
+                        }
+                    }
+                },
+                {
+                    "name": "Get All Products",
+                    "request": {
+                        "method": "GET",
+                        "url": "{{baseUrl}}/api/products"
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Cart",
+            "item": [
+                {
+                    "name": "Add to Cart",
+                    "request": {
+                        "method": "POST",
+                        "url": "{{baseUrl}}/api/cart",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "x-auth-token",
+                                "value": "{{authToken}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"productId\": \"{{productId}}\",\n    \"quantity\": 2\n}"
+                        }
+                    }
+                },
+                {
+                    "name": "Get Cart",
+                    "request": {
+                        "method": "GET",
+                        "url": "{{baseUrl}}/api/cart",
+                        "header": [
+                            {
+                                "key": "x-auth-token",
+                                "value": "{{authToken}}"
+                            }
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Orders",
+            "item": [
+                {
+                    "name": "Create Order",
+                    "request": {
+                        "method": "POST",
+                        "url": "{{baseUrl}}/api/orders",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "x-auth-token",
+                                "value": "{{authToken}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"shippingAddress\": {\n        \"street\": \"123 Test St\",\n        \"city\": \"Test City\",\n        \"state\": \"Test State\",\n        \"zipCode\": \"12345\",\n        \"country\": \"Test Country\"\n    }\n}"
+                        }
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Shipments",
+            "item": [
+                {
+                    "name": "Create Shipment",
+                    "request": {
+                        "method": "POST",
+                        "url": "{{baseUrl}}/api/shipments",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            },
+                            {
+                                "key": "x-auth-token",
+                                "value": "{{authToken}}"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\n    \"orderId\": \"{{orderId}}\",\n    \"carrier\": \"UPS\",\n    \"trackingNumber\": \"1Z999999999\",\n    \"shippingMethod\": \"standard\"\n}"
+                        }
+                    }
+                }
+            ]
+        }
+    ],
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:5000"
+        }
+    ]
+}
