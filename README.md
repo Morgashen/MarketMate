@@ -171,7 +171,7 @@ The system implements comprehensive error handling with appropriate HTTP status 
 
 ## Contributing
 
-I welcome contributions! Please read through my contributing guidelines before submitting pull requests to my project.
+we welcome contributions! Please read through our contributing guidelines before submitting pull requests to my project.
 
 1. Fork the repository
 2. Create your feature branch (git checkout -b feature/AmazingFeature)
@@ -179,13 +179,9 @@ I welcome contributions! Please read through my contributing guidelines before s
 4. Push to the branch (git push origin feature/AmazingFeature)
 5. Open a Pull Request
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
 ## Support
 
-For support, please email support@marketmate.com or open an issue in the GitHub repository.
+For support, please email Mashudumorgan@gmail.com or open an issue in the GitHub repository.
 
 ## Project Status
 
