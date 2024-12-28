@@ -1,80 +1,150 @@
-const User = require('../models/User');
+const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
+const config = require('config');
+const User = require('../models/User');
 
-// This controller handles all authentication-related business logic
 class AuthController {
-  // Register a new user
-  static async register(userData) {
-    // First check if user already exists
-    const existingUser = await User.findOne({ email: userData.email });
-    if (existingUser) {
-      throw new Error('A MarketMate account with this email already exists');
+  // @desc    Register a new user
+  // @route   POST /api/auth/register
+  static async register(req, res) {
+    try {
+      const { name, email, password } = req.body;
+
+      // Check if user exists
+      let user = await User.findOne({ email });
+      if (user) {
+        return res.status(400).json({ message: 'User already exists' });
+      }
+
+      // Create new user
+      user = new User({
+        name,
+        email,
+        password
+      });
+
+      // Hash password
+      const salt = await bcrypt.genSalt(10);
+      user.password = await bcrypt.hash(password, salt);
+
+      await user.save();
+
+      // Create and return JWT token
+      const payload = {
+        user: {
+          id: user.id
+        }
+      };
+
+      const token = jwt.sign(payload, config.get('jwtSecret'), {
+        expiresIn: '24h'
+      });
+
+      res.json({ token });
+    } catch (err) {
+      console.error('Registration error:', err.message);
+      res.status(500).json({ message: 'Server error during registration' });
     }
-
-    // Create new user
-    const user = new User({
-      email: userData.email,
-      password: userData.password, // Will be hashed by the User model
-      name: userData.name
-    });
-
-    await user.save();
-
-    // Generate JWT token
-    const token = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    // Remove password from response
-    const userResponse = user.toJSON();
-    delete userResponse.password;
-
-    return { token, user: userResponse };
   }
 
-  // Login existing user
-  static async login(credentials) {
-    // Find user by email
-    const user = await User.findOne({ email: credentials.email });
-    if (!user) {
-      throw new Error('Invalid MarketMate credentials');
+  // @desc    Authenticate user & get token
+  // @route   POST /api/auth/login
+  static async login(req, res) {
+    try {
+      const { email, password } = req.body;
+
+      // Check if user exists
+      const user = await User.findOne({ email });
+      if (!user) {
+        return res.status(400).json({ message: 'Invalid credentials' });
+      }
+
+      // Validate password
+      const isMatch = await bcrypt.compare(password, user.password);
+      if (!isMatch) {
+        return res.status(400).json({ message: 'Invalid credentials' });
+      }
+
+      // Create and return JWT token
+      const payload = {
+        user: {
+          id: user.id
+        }
+      };
+
+      const token = jwt.sign(payload, config.get('jwtSecret'), {
+        expiresIn: '24h'
+      });
+
+      res.json({ token });
+    } catch (err) {
+      console.error('Login error:', err.message);
+      res.status(500).json({ message: 'Server error during login' });
     }
-
-    // Verify password
-    const isValidPassword = await user.comparePassword(credentials.password);
-    if (!isValidPassword) {
-      throw new Error('Invalid MarketMate credentials');
-    }
-
-    // Generate JWT token
-    const token = jwt.sign(
-      { userId: user._id },
-      process.env.JWT_SECRET,
-      { expiresIn: '24h' }
-    );
-
-    // Remove password from response
-    const userResponse = user.toJSON();
-    delete userResponse.password;
-
-    return { token, user: userResponse };
   }
 
-  // Get user profile
-  static async getProfile(userId) {
-    const user = await User.findById(userId)
-      .select('-password')
-      .populate('orders');
-
-    if (!user) {
-      throw new Error('User not found');
+  // @desc    Get user profile
+  // @route   GET /api/auth/user
+  static async getProfile(req, res) {
+    try {
+      const user = await User.findById(req.user.id).select('-password');
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+      res.json(user);
+    } catch (err) {
+      console.error('Profile fetch error:', err.message);
+      res.status(500).json({ message: 'Server error fetching profile' });
     }
+  }
 
-    return user;
+  // @desc    Update user profile
+  // @route   PUT /api/auth/user
+  static async updateProfile(req, res) {
+    try {
+      const { name, email } = req.body;
+      const user = await User.findById(req.user.id);
+
+      if (!user) {
+        return res.status(404).json({ message: 'User not found' });
+      }
+
+      // Update fields if provided
+      if (name) user.name = name;
+      if (email) user.email = email;
+
+      await user.save();
+      res.json(user);
+    } catch (err) {
+      console.error('Profile update error:', err.message);
+      res.status(500).json({ message: 'Server error updating profile' });
+    }
+  }
+
+  // @desc    Change password
+  // @route   PUT /api/auth/password
+  static async changePassword(req, res) {
+    try {
+      const { currentPassword, newPassword } = req.body;
+      const user = await User.findById(req.user.id);
+
+      // Verify current password
+      const isMatch = await bcrypt.compare(currentPassword, user.password);
+      if (!isMatch) {
+        return res.status(400).json({ message: 'Current password is incorrect' });
+      }
+
+      // Hash new password
+      const salt = await bcrypt.genSalt(10);
+      user.password = await bcrypt.hash(newPassword, salt);
+
+      await user.save();
+      res.json({ message: 'Password updated successfully' });
+    } catch (err) {
+      console.error('Password change error:', err.message);
+      res.status(500).json({ message: 'Server error changing password' });
+    }
   }
 }
 
-// Export the controller for use in routes
 module.exports = AuthController;

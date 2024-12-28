@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config(); // Load environment variables
 const express = require('express');
 const config = require('config');
 const cors = require('cors');
@@ -6,7 +6,7 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const connectDB = require('./config/db');
 
-// Import custom modules for documentation and API info
+// Import API documentation function
 const getApiInfo = require('./config/apiDocs');
 const { renderApiDocumentation } = require('./views/documentation');
 
@@ -108,9 +108,14 @@ app.get('/ping', (req, res) => {
     res.status(200).send('pong');
 });
 
-// 404 - Not Found Middleware
+
 // Catches requests to undefined routes
 app.use((req, res, next) => {
+    if (req.url === '/favicon.ico') {
+        return res.status(204).end(); // No content, but successful
+    }
+
+    // For other undefined routes, proceed with the original 404 handling
     const error = new Error('Not Found');
     error.status = 404;
     next(error);
@@ -146,8 +151,8 @@ if (environment !== 'test') {
 
     // Start the server
     server = app.listen(PORT, () => {
-        console.log(`Server running in ${environment} mode on port ${PORT}`);
-        console.log(`API Documentation available at http://localhost:${PORT}`);
+        console.log(`Server Running in ${environment} mode on port ${PORT}`);
+        console.log(`MarketMate Api Available at http://localhost:${PORT}`);
     });
 
     // Handle Unhandled Promise Rejections

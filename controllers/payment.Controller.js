@@ -1,134 +1,238 @@
-const stripe = require("../config/stripe");
-const asyncHandler = require("express-async-handler");
-const Order = require("../models/orderModel");
-const { v4: uuidv4 } = require("uuid");
-const { getUserOrSessionId } = require("../utils/userUtils");
-const redisClient = require("../utils/redisClient");
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const Order = require('../models/Order');
+const User = require('../models/User');
 
-/**
- * Handles Payment functionalities
- */
 class PaymentController {
-  /**
-   * Confirms payment and stores order to db
-   * @param {*} _request
-   * @param {*} response
-   * @returns
-   */
-  pay = asyncHandler(async (request, response) => {
+  // @desc    Create payment intent
+  // @route   POST /api/payments/create-intent
+  static async createPaymentIntent(req, res) {
     try {
-      const {
-        amount,
-        currency = "usd",
-        paymentMethodId,
-        shippingDetails,
-        cart_
-      } = request.body;
-      console.log("Here", cart_)
+      const { amount, currency = 'usd' } = req.body;
 
-      const userOrSessionId = getUserOrSessionId(request);
-      const id = `order:${userOrSessionId}`;
-
-      if (!amount || !paymentMethodId || !shippingDetails) {
-        return response.status(400).send({
-          success: false,
-          message: "Amount, Payment ID, and Shipping Details are required",
-          result: "",
-        });
-      }
       const paymentIntent = await stripe.paymentIntents.create({
-        amount: amount * 100,
+        amount: Math.round(amount * 100),
         currency,
-        payment_method: paymentMethodId,
-        confirm: true,
-        automatic_payment_methods: {
-          enabled: true,
-          allow_redirects: "never",
-        },
+        metadata: {
+          userId: req.user.id
+        }
       });
 
-    //     let cart;
-    // if (id) {
-
-    //     cart = await redisClient.getValue(id);
-    //     cart = JSON.parse(cart);
-    // } else {
-    //     cart = cart_;
-    //     console.log(cart_);
-    // }
-
-      if (!cart_) {
-        return response.status(404).send({
-          success: false,
-          message: "Cart is empty",
-          result: "",
-        });
-      }
-
-      const orderItems = Object.values(cart_).map((item) => ({
-        name: item.name,
-        product: item.product,
-        image: `/uploads/${item.image.split('/').pop()}`,
-        price: item.price,
-        quantity: item.quantity,
-      }));
-    //   const totalPrice = cart_.cartItems.reduce(
-    //     (acc, item) => acc + item.quantity * item.price,
-    //     0
-    //   );
-
-      const shippingAddress = {
-        address: shippingDetails.address,
-        city: shippingDetails.city,
-        postalCode: shippingDetails.postalCode,
-        country: shippingDetails.country,
-      };
-      const orderData = {
-        user: userOrSessionId,
-        orderItems,
-        shippingAddress,
-        paymentMethod: "card",
-        totalPrice: amount,
-        isPaid: true,
-        paidAt: Date.now(),
-        paymentInfo: {
-          id: paymentIntent.id,
-          status: paymentIntent.status,
-        },
-      };
-
-      let createdOrder;
-        console.log(request);
-      if (request.user) {
-        // Authenticated user, save order to db
-        const order = new Order(orderData);
-        createdOrder = await order.save();
-        console.log('Created in db')
-      } else {
-        // Unauthenticated user, save order to Redis
-        const orderId = `order:${uuidv4()}`;
-        await redisClient.setValue(
-          orderId,
-          JSON.stringify(orderData),
-          24 * 3600
-        );
-        createdOrder = orderData;
-      }
-
-      return response.status(201).send({
-        success: true,
-        message: "Order placed successfully",
-        result: createdOrder,
+      res.json({
+        clientSecret: paymentIntent.client_secret,
+        paymentIntentId: paymentIntent.id
       });
-    } catch (error) {
-      console.error("Error processing payment:", error);
-      return response.status(500).send({
-        success: false,
-        message: "Internal Server Error",
-        result: "",
-      });
+    } catch (err) {
+      console.error('Payment intent creation error:', err);
+      res.status(500).json({ message: 'Error creating payment intent' });
     }
-  });
+  }
+
+  // @desc    Confirm payment
+  // @route   POST /api/payments/confirm
+  static async confirmPayment(req, res) {
+    try {
+      const { paymentIntentId, paymentMethodId } = req.body;
+
+      const paymentIntent = await stripe.paymentIntents.confirm(
+        paymentIntentId,
+        { payment_method: paymentMethodId }
+      );
+
+      res.json({ paymentIntent });
+    } catch (err) {
+      console.error('Payment confirmation error:', err);
+      res.status(500).json({ message: 'Error confirming payment' });
+    }
+  }
+
+  // @desc    Process refund
+  // @route   POST /api/payments/refund
+  static async processRefund(req, res) {
+    try {
+      const { orderId, amount, reason } = req.body;
+
+      const order = await Order.findById(orderId);
+      if (!order) {
+        return res.status(404).json({ message: 'Order not found' });
+      }
+
+      const refund = await stripe.refunds.create({
+        payment_intent: order.paymentIntent,
+        amount: amount ? Math.round(amount * 100) : undefined,
+        reason: reason || 'requested_by_customer'
+      });
+
+      // Update order with refund information
+      order.refund = {
+        refundId: refund.id,
+        amount: amount || order.total,
+        reason,
+        date: new Date()
+      };
+      order.status = 'refunded';
+      await order.save();
+
+      res.json({ refund, order });
+    } catch (err) {
+      console.error('Refund processing error:', err);
+      res.status(500).json({ message: 'Error processing refund' });
+    }
+  }
+
+  // @desc    Get payment methods for user
+  // @route   GET /api/payments/methods
+  static async getPaymentMethods(req, res) {
+    try {
+      const user = await User.findById(req.user.id);
+      if (!user.stripeCustomerId) {
+        return res.json({ paymentMethods: [] });
+      }
+
+      const paymentMethods = await stripe.paymentMethods.list({
+        customer: user.stripeCustomerId,
+        type: 'card'
+      });
+
+      res.json({ paymentMethods: paymentMethods.data });
+    } catch (err) {
+      console.error('Payment methods fetch error:', err);
+      res.status(500).json({ message: 'Error fetching payment methods' });
+    }
+  }
+
+  // @desc    Add payment method
+  // @route   POST /api/payments/methods
+  static async addPaymentMethod(req, res) {
+    try {
+      const { paymentMethodId } = req.body;
+
+      // Get or create Stripe customer
+      let user = await User.findById(req.user.id);
+      if (!user.stripeCustomerId) {
+        const customer = await stripe.customers.create({
+          email: user.email,
+          metadata: {
+            userId: user.id
+          }
+        });
+        user.stripeCustomerId = customer.id;
+        await user.save();
+      }
+
+      // Attach payment method to customer
+      const paymentMethod = await stripe.paymentMethods.attach(
+        paymentMethodId,
+        { customer: user.stripeCustomerId }
+      );
+
+      res.json({ paymentMethod });
+    } catch (err) {
+      console.error('Payment method addition error:', err);
+      res.status(500).json({ message: 'Error adding payment method' });
+    }
+  }
+
+  // @desc    Delete payment method
+  // @route   DELETE /api/payments/methods/:methodId
+  static async deletePaymentMethod(req, res) {
+    try {
+      const paymentMethod = await stripe.paymentMethods.detach(
+        req.params.methodId
+      );
+
+      res.json({
+        message: 'Payment method removed successfully',
+        paymentMethod
+      });
+    } catch (err) {
+      console.error('Payment method deletion error:', err);
+      res.status(500).json({ message: 'Error removing payment method' });
+    }
+  }
+
+  // @desc    Handle Stripe webhook
+  // @route   POST /api/payments/webhook
+  static async handleWebhook(req, res) {
+    const sig = req.headers['stripe-signature'];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    try {
+      const event = stripe.webhooks.constructEvent(
+        req.body,
+        sig,
+        webhookSecret
+      );
+
+      // Handle different event types
+      switch (event.type) {
+        case 'payment_intent.succeeded':
+          await PaymentController.handlePaymentSuccess(event.data.object);
+          break;
+        case 'payment_intent.payment_failed':
+          await PaymentController.handlePaymentFailure(event.data.object);
+          break;
+        case 'charge.refunded':
+          await PaymentController.handleRefund(event.data.object);
+          break;
+      }
+
+      res.json({ received: true });
+    } catch (err) {
+      console.error('Webhook error:', err);
+      res.status(400).json({ message: err.message });
+    }
+  }
+
+  static async handlePaymentSuccess(paymentIntent) {
+    try {
+      const order = await Order.findOne({
+        paymentIntent: paymentIntent.id
+      });
+
+      if (order) {
+        order.paymentStatus = 'paid';
+        await order.save();
+      }
+    } catch (err) {
+      console.error('Payment success handling error:', err);
+    }
+  }
+
+  static async handlePaymentFailure(paymentIntent) {
+    try {
+      const order = await Order.findOne({
+        paymentIntent: paymentIntent.id
+      });
+
+      if (order) {
+        order.paymentStatus = 'failed';
+        order.status = 'cancelled';
+        await order.save();
+      }
+    } catch (err) {
+      console.error('Payment failure handling error:', err);
+    }
+  }
+
+  static async handleRefund(charge) {
+    try {
+      const order = await Order.findOne({
+        paymentIntent: charge.payment_intent
+      });
+
+      if (order) {
+        order.status = 'refunded';
+        order.refund = {
+          refundId: charge.refunds.data[0].id,
+          amount: charge.amount_refunded / 100,
+          date: new Date()
+        };
+        await order.save();
+      }
+    } catch (err) {
+      console.error('Refund handling error:', err);
+    }
+  }
 }
 
-module.exports = new PaymentController();
+module.exports = PaymentController;

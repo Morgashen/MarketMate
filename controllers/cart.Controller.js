@@ -1,159 +1,186 @@
-const asyncHandler = require("express-async-handler");
+const Cart = require('../models/Cart');
+const Product = require('../models/Product');
 
-const { getUserOrSessionId } = require("../utils/userUtils");
-const redisClient = require("../utils/redisClient");
-const Product = require("../models/productModel");
-
-/**
- * Handles Cart Functionalities
- */
 class CartController {
-  /**
-   * Adds a product to cart
-   */
-  addToCart = asyncHandler(async (request, response) => {
+  // @desc    Get user's cart
+  // @route   GET /api/cart
+  static async getCart(req, res) {
     try {
-    console.log(request.headers)
-      const userOrSessionId = getUserOrSessionId(request);
-      const id = `cart:${userOrSessionId}`;
-      const { product, quantity } = request.body;
-      if (!product || !quantity)
-        return response.status(400).send({
-          success: false,
-          message: "Missing product or quantity",
-          result: "",
-        });
+      let cart = await Cart.findOne({ user: req.user.id })
+        .populate('items.product');
 
-      let cart = await redisClient.getValue(id);
-      let updatedCart;
-
-      if (cart) {
-        cart = JSON.parse(cart);
-        const itemIndex = cart.cartItems.findIndex(
-          (item) => item.product.toString() == product
-        );
-
-        if (itemIndex > -1) {
-          cart.cartItems[itemIndex].quantity += quantity;
-        } else {
-          cart.cartItems.push({ product, quantity });
-        }
-
-        updatedCart = cart;
-      } else {
-
-          const product_ = await Product.findOne({ sku: product });
-        updatedCart = {
-          user: id,
-          cartItems: [
-            {
-              product,
-              quantity,
-              name: product_.name,
-              price: product_.price,
-              image: product_.images[0],
-            },
-          ],
-        };
+      if (!cart) {
+        cart = new Cart({ user: req.user.id, items: [] });
+        await cart.save();
       }
 
-      redisClient.setValue(id, JSON.stringify(updatedCart), 24 * 3600);
-
-      return response.status(200).send({
-        success: true,
-        message: "Product added to cart successfully",
-        result: updatedCart,
-      });
-    } catch (error) {
-      console.log("Internal Server Error: ", error);
-      return response.status(500).send({
-        success: false,
-        message: "An error Occurred",
-        result: "",
-      });
+      const total = await cart.calculateTotal();
+      res.json({ cart, total });
+    } catch (err) {
+      console.error('Cart fetch error:', err.message);
+      res.status(500).json({ message: 'Error fetching cart' });
     }
-  });
+  }
 
-  /**
-   * Retrieves a product from cart
-   */
-  getCart = asyncHandler(async (request, response) => {
-    const userOrSessionId = getUserOrSessionId(request);
-    const id = `cart:${userOrSessionId}`;
-    const cart = await redisClient.getValue(id);
+  // @desc    Add item to cart
+  // @route   POST /api/cart
+  static async addToCart(req, res) {
+    try {
+      const { productId, quantity } = req.body;
 
-    if (cart) {
-      return response.status(200).send({
-        success: true,
-        message: "Cart retrieved successfully",
-        result: JSON.parse(cart),
-      });
-    } else {
-      return response.status(200).send({
-        success: true,
-        message: "Cart is empty",
-        result: "",
-      });
-    }
-  });
+      // Validate product exists and has sufficient stock
+      const product = await Product.findById(productId);
+      if (!product) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+      if (product.stock < quantity) {
+        return res.status(400).json({ message: 'Insufficient stock' });
+      }
 
-  /**
-   * Removes a product from cart
-  */
-  removeFromCart = asyncHandler(async (request, response) => {
-    const userOrSessionId = getUserOrSessionId(request);
-    const id = `cart:${userOrSessionId}`;
-    const { sku } = request.params;
-    if (!sku)
-      return response.status(400).send({
-        success: false,
-        message: "Product SKU is missing",
-        result: "",
-      });
+      let cart = await Cart.findOne({ user: req.user.id });
+      if (!cart) {
+        cart = new Cart({ user: req.user.id, items: [] });
+      }
 
-    let cart = await redisClient.getValue(id);
-
-    if (cart) {
-      cart = JSON.parse(cart);
-      cart.cartItems = cart.cartItems.filter(
-        (item) => item.product.toString() !== sku
+      // Check if product already exists in cart
+      const itemIndex = cart.items.findIndex(
+        item => item.product.toString() === productId
       );
-      redisClient.setValue(id, JSON.stringify(cart), 24 * 3600);
-      return response.status(200).send({
-        success: true,
-        message: "Product removed from cart",
-        result: cart,
-      });
-    } else {
-      return response.status(404).send({
-        success: true,
-        message: "Cart is empty",
-        result: "",
-      });
+
+      if (itemIndex > -1) {
+        // Product exists in cart, update quantity
+        cart.items[itemIndex].quantity = quantity;
+      } else {
+        // Product does not exist in cart, add new item
+        cart.items.push({ product: productId, quantity });
+      }
+
+      await cart.save();
+      await cart.populate('items.product');
+
+      const total = await cart.calculateTotal();
+      res.json({ cart, total });
+    } catch (err) {
+      console.error('Cart update error:', err.message);
+      res.status(500).json({ message: 'Error updating cart' });
     }
-  });
+  }
 
-  deleteCart = asyncHandler(async (request, response) => {
-    const userOrSessionId = getUserOrSessionId(request);
-    const id = `cart:${userOrSessionId}`;
-    let cart = await redisClient.getValue(id);
+  // @desc    Update cart item quantity
+  // @route   PUT /api/cart/:productId
+  static async updateCartItem(req, res) {
+    try {
+      const { quantity } = req.body;
+      const productId = req.params.productId;
 
-    if (!cart) {
-        return response.status(200).send({
-            success: true,
-            message: "Cart id empty",
-            result: "",
-          });
-    }else {
-        redisClient.deleteValue(id);
-        return response.status(200).send({
-            success: true,
-            message: "Cart has been reset",
-            result: "",
-          });
-        }
+      // Validate product and stock
+      const product = await Product.findById(productId);
+      if (!product) {
+        return res.status(404).json({ message: 'Product not found' });
+      }
+      if (product.stock < quantity) {
+        return res.status(400).json({ message: 'Insufficient stock' });
+      }
 
-    })
+      let cart = await Cart.findOne({ user: req.user.id });
+      if (!cart) {
+        return res.status(404).json({ message: 'Cart not found' });
+      }
+
+      const itemIndex = cart.items.findIndex(
+        item => item.product.toString() === productId
+      );
+
+      if (itemIndex === -1) {
+        return res.status(404).json({ message: 'Item not found in cart' });
+      }
+
+      cart.items[itemIndex].quantity = quantity;
+      await cart.save();
+      await cart.populate('items.product');
+
+      const total = await cart.calculateTotal();
+      res.json({ cart, total });
+    } catch (err) {
+      console.error('Cart item update error:', err.message);
+      res.status(500).json({ message: 'Error updating cart item' });
+    }
+  }
+
+  // @desc    Remove item from cart
+  // @route   DELETE /api/cart/:productId
+  static async removeFromCart(req, res) {
+    try {
+      const cart = await Cart.findOne({ user: req.user.id });
+      if (!cart) {
+        return res.status(404).json({ message: 'Cart not found' });
+      }
+
+      cart.items = cart.items.filter(
+        item => item.product.toString() !== req.params.productId
+      );
+
+      await cart.save();
+      const total = await cart.calculateTotal();
+      res.json({ cart, total });
+    } catch (err) {
+      console.error('Cart item removal error:', err.message);
+      res.status(500).json({ message: 'Error removing item from cart' });
+    }
+  }
+
+  // @desc    Clear cart
+  // @route   DELETE /api/cart
+  static async clearCart(req, res) {
+    try {
+      const cart = await Cart.findOne({ user: req.user.id });
+      if (!cart) {
+        return res.status(404).json({ message: 'Cart not found' });
+      }
+
+      cart.items = [];
+      await cart.save();
+
+      res.json({ message: 'Cart cleared successfully', cart });
+    } catch (err) {
+      console.error('Cart clear error:', err.message);
+      res.status(500).json({ message: 'Error clearing cart' });
+    }
+  }
+
+  // @desc    Get cart summary
+  // @route   GET /api/cart/summary
+  static async getCartSummary(req, res) {
+    try {
+      const cart = await Cart.findOne({ user: req.user.id })
+        .populate('items.product');
+
+      if (!cart) {
+        return res.json({
+          itemCount: 0,
+          total: 0,
+          items: []
+        });
+      }
+
+      const total = await cart.calculateTotal();
+      const itemCount = cart.items.reduce((sum, item) => sum + item.quantity, 0);
+
+      res.json({
+        itemCount,
+        total,
+        items: cart.items.map(item => ({
+          name: item.product.name,
+          quantity: item.quantity,
+          price: item.product.price,
+          subtotal: item.quantity * item.product.price
+        }))
+      });
+    } catch (err) {
+      console.error('Cart summary error:', err.message);
+      res.status(500).json({ message: 'Error fetching cart summary' });
+    }
+  }
 }
 
-module.exports = new CartController();
+module.exports = CartController;
