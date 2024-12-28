@@ -1,12 +1,7 @@
-const config = {
+module.exports = {
     testEnvironment: 'node',
-    verbose: true,
-    forceExit: true,
-    clearMocks: true,
-    resetMocks: true,
-    restoreMocks: true,
-    testMatch: ['**/__tests__/**/*.js', '**/*.test.js'],
-    setupFilesAfterEnv: ['./jest.setup.js']
+    testMatch: [
+        '**/tests/**/*.test.js'
+    ],
+    testPathIgnorePatterns: ['/node_modules/'],
 };
-
-module.exports = config;
