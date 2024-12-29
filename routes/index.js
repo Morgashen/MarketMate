@@ -1,26 +1,22 @@
-const express = require('express');
-const healthRoutes = require('./health');
-// Import other route modules here
+const app = express();
 
-const setupRoutes = (app) => {
-    // Mount health check routes
-    app.use('/health', healthRoutes);
+// Ensure your router is mounted correctly in your main app.js/server.js:
+app.use('/api/v1', router);  // Assuming you're using an /api/v1 prefix
 
-    // Mount other routes here
-    // app.use('/api/users', userRoutes);
-    // app.use('/api/products', productRoutes);
-    // etc.
+// 404 Handler - Place this AFTER mounting your router
+app.use((req, res, next) => {
+    const error = new Error('Not Found');
+    error.status = 404;
+    next(error);
+});
 
-    // Root route for API information
-    app.get('/', (req, res) => {
-        res.json({
-            name: app.locals.title,
-            version: app.locals.version,
-            environment: process.env.NODE_ENV || 'development',
-            documentation: '/api-docs', // If you have API documentation
-            health: '/health'
-        });
+// General Error Handler
+app.use((error, req, res, next) => {
+    res.status(error.status || 500);
+    res.json({
+        error: {
+            message: error.message,
+            status: error.status
+        }
     });
-};
-
-module.exports = setupRoutes;
+});
