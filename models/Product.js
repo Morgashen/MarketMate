@@ -1,37 +1,58 @@
 const mongoose = require('mongoose');
 
-const ProductSchema = new mongoose.Schema({
+// Define the product schema with validation and type definitions
+const productSchema = new mongoose.Schema({
+    sku: {
+        type: String,
+        unique: true,
+        sparse: true,  // Allows null SKUs during creation since we'll generate them
+        uppercase: true // Ensures consistent SKU format
+    },
     name: {
         type: String,
-        required: true,
-        trim: true
-    },
-    description: {
-        type: String,
-        required: true
+        required: [true, 'Product name is required'],
+        trim: true,
+        minlength: [2, 'Product name must be at least 2 characters'],
+        maxlength: [100, 'Product name cannot exceed 100 characters']
     },
     price: {
         type: Number,
-        required: true,
-        min: 0
+        required: [true, 'Price is required'],
+        min: [0, 'Price cannot be negative']
     },
-    image: {
+    description: {
         type: String,
-        required: true
+        trim: true,
+        maxlength: [1000, 'Description cannot exceed 1000 characters']
+    },
+    stockQuantity: {
+        type: Number,
+        default: 0,
+        min: [0, 'Stock quantity cannot be negative']
     },
     category: {
         type: String,
-        required: true
+        required: [true, 'Category is required'],
+        trim: true
     },
-    stock: {
-        type: Number,
-        required: true,
-        min: 0
-    },
-    createdAt: {
-        type: Date,
-        default: Date.now
+    status: {
+        type: String,
+        enum: ['active', 'inactive'],
+        default: 'active'
     }
+}, {
+    timestamps: true // Automatically manage createdAt and updatedAt
 });
 
-module.exports = mongoose.model('Product', ProductSchema);
+// Add SKU generation middleware
+productSchema.pre('save', async function (next) {
+    if (!this.sku) {
+        const timestamp = Date.now().toString(36);
+        const random = Math.random().toString(36).substr(2, 5);
+        this.sku = `PRD-${timestamp}-${random}`.toUpperCase();
+    }
+    next();
+});
+
+const Product = mongoose.model('Product', productSchema);
+module.exports = Product;

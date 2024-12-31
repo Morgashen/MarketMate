@@ -1,6 +1,8 @@
 {
     "mongoURI": "mongodb+srv://<username>:<password>@<cluster-url>/<database-name>?retryWrites=true&w=majority",
-    "jwtSecret": "your_jwt_secret_key",
+    "jwtSecret": "your-secret-key",
+    "jwtAudience": "your-app-name",
+    "jwtIssuer": "your-app-domain",
     "stripeSecretKey": "your_stripe_secret_key",
     "stripeWebhookSecret": "your_stripe_webhook_secret",
     "port": 5000,

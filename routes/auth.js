@@ -12,42 +12,84 @@ const User = require('../models/User');
 // @access  Public
 router.post('/register', validate(registerValidation), async (req, res) => {
     try {
+        //add development logging
+        if (process.env.NODE_ENV === 'development') {
+            console.log('Registration attempt:', {
+                path: req.path,
+                originalUrl: req.originalUrl,
+                body: { ...req.body, password: '[REDACTED]' }
+            });
+        }
         const { name, email, password } = req.body;
 
-        let user = await User.findOne({ email });
+        // Update the user existence check
+        let user = await User.findOne({ email }).exec();
         if (user) {
-            return res.status(400).json({ message: 'User already exists' });
+            return res.status(409).json({
+                status: 'error',
+                code: 'USER_EXISTS',
+                message: 'A user with this email already exists'
+            });
         }
-
+        // Update the user existence check
+        const salt = await bcrypt.genSalt(12);
         user = new User({
             name,
             email,
-            password
+            password: await bcrypt.hash(password, salt)
         });
 
-        const salt = await bcrypt.genSalt(10);
-        user.password = await bcrypt.hash(password, salt);
-
         await user.save();
-
+        // upadate the JWT signing with more options
         const payload = {
-            user: {
-                id: user.id
-            }
+            user: { id: user.id },
+            iat: Date.now()
+
         };
 
         jwt.sign(
             payload,
             config.get('jwtSecret'),
-            { expiresIn: '24h' },
+            {
+                expiresIn: '24h',
+                algorithm: 'HS256',
+                audience: config.get('jwtAudience'),
+                issuer: config.get('jwtIssuer')
+            },
             (err, token) => {
-                if (err) throw err;
-                res.json({ token });
+                if (err) {
+                    console.error('JWT generation error:', err);
+                    return res.stutus(500).json({
+                        status: 'error',
+                        code: 'JWT_GENERATIOM_FAILED',
+                        message: 'failed to complete registration'
+                    });
+                }
+                res.status(201).json({
+                    status: 'success',
+                    data: {
+                        token,
+                        user: {
+                            id: user.id,
+                            name: user.name,
+                            email: user.email,
+                            created: user.createdAt
+                        }
+                    }
+                });
             }
+
         );
     } catch (err) {
-        console.error('Registration error:', err.message);
-        res.status(500).send('Server error');
+        console.error('Registration error:', {
+            message: err.message,
+            stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+        });
+        res.status(500).json({
+            status: 'error',
+            code: 'REGISTRATION_FAILED',
+            message: 'An unexpected error occurred during registration'
+        });
     }
 });
 

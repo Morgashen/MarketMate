@@ -1,45 +1,66 @@
-const { logger } = require('../config/logging');
+class AppError extends Error {
+    constructor(message, statusCode) {
+        super(message);
+        this.statusCode = statusCode;
+        this.status = `${statusCode}`.startsWith('4') ? 'fail' : 'error';
+        this.isOperational = true;
 
-const setupErrorHandling = (app) => {
-    // Handle 404 errors
-    app.use((req, res, next) => {
-        const error = new Error('Not Found');
-        error.status = 404;
-        next(error);
-    });
+        Error.captureStackTrace(this, this.constructor);
+    }
+}
 
-    // Global error handler
-    app.use((error, req, res, next) => {
-        const status = error.status || 500;
-        const message = error.message || 'Internal Server Error';
+const handleJWTError = () => new AppError('Invalid token. Please log in again.', 401);
+const handleJWTExpiredError = () => new AppError('Your token has expired. Please log in again.', 401);
+const handleValidationError = err => {
+    const errors = Object.values(err.errors).map(el => el.message);
+    return new AppError(`Invalid input data. ${errors.join('. ')}`, 400);
+};
+const handleDuplicateKeyError = err => {
+    const value = err.errmsg.match(/(["'])(\\?.)*?\1/)[0];
+    return new AppError(`Duplicate field value: ${value}. Please use another value.`, 400);
+};
 
-        // Log the error
-        logger.error('Error occurred:', {
-            error: {
-                message: error.message,
-                stack: error.stack,
-                status: status
-            },
-            request: {
-                method: req.method,
-                url: req.url,
-                body: req.body,
-                params: req.params,
-                query: req.query
-            }
+const errorHandler = (environment) => (err, req, res, next) => {
+    err.statusCode = err.statusCode || 500;
+    err.status = err.status || 'error';
+
+    if (environment === 'development') {
+        // Development error response
+        return res.status(err.statusCode).json({
+            status: err.status,
+            error: err,
+            message: err.message,
+            stack: err.stack
         });
+    }
 
-        // Send error response
-        res.status(status).json({
-            error: {
-                message: process.env.NODE_ENV === 'production' && status === 500
-                    ? 'Internal Server Error'
-                    : message
-            }
+    // Production error handling
+    let error = { ...err };
+    error.message = err.message;
+
+    // Handle specific error types
+    if (error.name === 'JsonWebTokenError') error = handleJWTError();
+    if (error.name === 'TokenExpiredError') error = handleJWTExpiredError();
+    if (error.name === 'ValidationError') error = handleValidationError(error);
+    if (error.code === 11000) error = handleDuplicateKeyError(error);
+
+    // Operational, trusted error: send message to client
+    if (error.isOperational) {
+        return res.status(error.statusCode).json({
+            status: error.status,
+            message: error.message
         });
+    }
+
+    // Programming or other unknown error: don't leak error details
+    console.error('ERROR 💥:', error);
+    return res.status(500).json({
+        status: 'error',
+        message: 'Something went wrong'
     });
 };
 
 module.exports = {
-    setupErrorHandling
+    AppError,
+    errorHandler
 };

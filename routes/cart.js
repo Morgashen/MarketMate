@@ -4,9 +4,77 @@ const Cart = require('../models/Cart');
 const Product = require('../models/Product');
 const auth = require('../middleware/auth');
 const mongoose = require('mongoose');
+const rateLimit = require('express-rate-limit');
 
-// Initialize or get user's cart
-router.get('/', auth, async (req, res) => {
+// Rate limiting configuration for different cart operations
+const cartViewLimit = rateLimit({
+    windowMs: 15 * 60 * 1000,  // 15 minute window
+    max: 100,                  // 100 requests per window
+    message: {
+        error: 'Too many cart view requests. Please try again later.',
+        retryAfter: '15 minutes'
+    },
+    standardHeaders: true,
+    legacyHeaders: false
+});
+
+const cartModifyLimit = rateLimit({
+    windowMs: 5 * 60 * 1000,   // 5 minute window
+    max: 30,                   // 30 modifications per window
+    message: {
+        error: 'Too many cart modifications. Please try again later.',
+        retryAfter: '5 minutes'
+    }
+});
+
+// Input validation middleware
+const validateCartItem = (req, res, next) => {
+    const { productId, quantity } = req.body;
+
+    if (!mongoose.Types.ObjectId.isValid(productId)) {
+        return res.status(400).json({
+            message: 'Invalid product ID format',
+            details: 'Product ID must be a valid MongoDB ObjectId'
+        });
+    }
+
+    if (!Number.isInteger(quantity)) {
+        return res.status(400).json({
+            message: 'Invalid quantity format',
+            details: 'Quantity must be a whole number'
+        });
+    }
+
+    if (quantity < 0) {
+        return res.status(400).json({
+            message: 'Invalid quantity value',
+            details: 'Quantity cannot be negative'
+        });
+    }
+
+    if (quantity > 100) {
+        return res.status(400).json({
+            message: 'Quantity too large',
+            details: 'Maximum quantity per item is 100'
+        });
+    }
+
+    next();
+};
+
+// Global middleware for cart routes
+router.use((req, res, next) => {
+    // Security headers
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    res.set('X-Content-Type-Options', 'nosniff');
+    res.set('X-Frame-Options', 'DENY');
+    next();
+});
+
+// Get cart contents
+router.get('/', cartViewLimit, auth, async (req, res) => {
     try {
         let cart = await Cart.findOne({ user: req.user.userId })
             .populate('items.product');
@@ -16,7 +84,7 @@ router.get('/', auth, async (req, res) => {
             await cart.save();
         }
 
-        // Check if any products in cart have been deleted or changed price
+        // Synchronize cart with current product data
         const updatedItems = [];
         let hasChanges = false;
 
@@ -25,12 +93,18 @@ router.get('/', auth, async (req, res) => {
 
             if (!currentProduct) {
                 hasChanges = true;
-                continue; // Skip deleted products
+                continue; // Remove deleted products
             }
 
             if (currentProduct.price !== item.priceAtAddition) {
                 hasChanges = true;
                 item.priceAtAddition = currentProduct.price;
+            }
+
+            // Ensure quantity doesn't exceed current stock
+            if (item.quantity > currentProduct.stock) {
+                hasChanges = true;
+                item.quantity = currentProduct.stock;
             }
 
             updatedItems.push(item);
@@ -45,52 +119,51 @@ router.get('/', auth, async (req, res) => {
         res.json({
             items: cart.items,
             total: cart.calculateTotal(),
-            lastUpdated: cart.lastUpdated
+            lastUpdated: cart.lastUpdated,
+            itemCount: cart.items.length
         });
     } catch (error) {
         console.error('Cart retrieval error:', error);
         res.status(500).json({
-            message: 'Failed to retrieve your MarketMate shopping cart'
+            message: 'Failed to retrieve cart',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
 
 // Add item to cart
-router.post('/items', auth, async (req, res) => {
+router.post('/items', cartModifyLimit, auth, validateCartItem, async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
     try {
         const { productId, quantity } = req.body;
 
-        // Validate product existence and stock
-        const product = await Product.findById(productId);
+        const product = await Product.findById(productId).session(session);
         if (!product) {
-            throw new Error('Product not found in MarketMate catalog');
+            throw new Error('Product not found');
         }
 
         if (product.stock < quantity) {
-            throw new Error('Requested quantity exceeds available stock');
+            throw new Error(`Only ${product.stock} units available`);
         }
 
-        let cart = await Cart.findOne({ user: req.user.userId });
+        let cart = await Cart.findOne({ user: req.user.userId }).session(session);
         if (!cart) {
             cart = new Cart({ user: req.user.userId, items: [] });
         }
 
-        // Check if product already in cart
         const existingItem = cart.items.find(item =>
             item.product.toString() === productId
         );
 
         if (existingItem) {
-            // Ensure new total quantity doesn't exceed stock
             const newQuantity = existingItem.quantity + quantity;
             if (newQuantity > product.stock) {
-                throw new Error('Total quantity would exceed available stock');
+                throw new Error(`Cannot add ${quantity} more units. Cart would exceed available stock`);
             }
             existingItem.quantity = newQuantity;
-            existingItem.priceAtAddition = product.price; // Update to current price
+            existingItem.priceAtAddition = product.price;
         } else {
             cart.items.push({
                 product: productId,
@@ -103,26 +176,30 @@ router.post('/items', auth, async (req, res) => {
         await cart.save({ session });
         await session.commitTransaction();
 
-        // Populate product details before sending response
+        // Populate product details for response
         await cart.populate('items.product');
 
         res.json({
             items: cart.items,
             total: cart.calculateTotal(),
-            lastUpdated: cart.lastUpdated
+            lastUpdated: cart.lastUpdated,
+            itemCount: cart.items.length
         });
 
     } catch (error) {
         await session.abortTransaction();
         console.error('Add to cart error:', error);
-        res.status(400).json({ message: error.message });
+        res.status(400).json({
+            message: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     } finally {
         session.endSession();
     }
 });
 
 // Update cart item quantity
-router.put('/items/:productId', auth, async (req, res) => {
+router.put('/items/:productId', cartModifyLimit, auth, validateCartItem, async (req, res) => {
     const session = await mongoose.startSession();
     session.startTransaction();
 
@@ -130,26 +207,21 @@ router.put('/items/:productId', auth, async (req, res) => {
         const { productId } = req.params;
         const { quantity } = req.body;
 
-        if (quantity < 0) {
-            throw new Error('Quantity cannot be negative');
-        }
-
-        const product = await Product.findById(productId);
+        const product = await Product.findById(productId).session(session);
         if (!product) {
-            throw new Error('Product not found in MarketMate catalog');
+            throw new Error('Product not found');
         }
 
         if (quantity > product.stock) {
-            throw new Error('Requested quantity exceeds available stock');
+            throw new Error(`Only ${product.stock} units available`);
         }
 
-        const cart = await Cart.findOne({ user: req.user.userId });
+        const cart = await Cart.findOne({ user: req.user.userId }).session(session);
         if (!cart) {
             throw new Error('Cart not found');
         }
 
         if (quantity === 0) {
-            // Remove item from cart
             cart.items = cart.items.filter(item =>
                 item.product.toString() !== productId
             );
@@ -163,7 +235,7 @@ router.put('/items/:productId', auth, async (req, res) => {
             }
 
             item.quantity = quantity;
-            item.priceAtAddition = product.price; // Update to current price
+            item.priceAtAddition = product.price;
         }
 
         cart.lastUpdated = Date.now();
@@ -175,20 +247,24 @@ router.put('/items/:productId', auth, async (req, res) => {
         res.json({
             items: cart.items,
             total: cart.calculateTotal(),
-            lastUpdated: cart.lastUpdated
+            lastUpdated: cart.lastUpdated,
+            itemCount: cart.items.length
         });
 
     } catch (error) {
         await session.abortTransaction();
         console.error('Update cart error:', error);
-        res.status(400).json({ message: error.message });
+        res.status(400).json({
+            message: error.message,
+            details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
     } finally {
         session.endSession();
     }
 });
 
 // Clear cart
-router.delete('/', auth, async (req, res) => {
+router.delete('/', cartModifyLimit, auth, async (req, res) => {
     try {
         const cart = await Cart.findOne({ user: req.user.userId });
         if (cart) {
@@ -200,12 +276,14 @@ router.delete('/', auth, async (req, res) => {
         res.json({
             items: [],
             total: 0,
-            lastUpdated: Date.now()
+            lastUpdated: Date.now(),
+            itemCount: 0
         });
     } catch (error) {
         console.error('Clear cart error:', error);
         res.status(500).json({
-            message: 'Failed to clear your MarketMate shopping cart'
+            message: 'Failed to clear cart',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
