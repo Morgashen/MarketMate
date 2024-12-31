@@ -1,6 +1,6 @@
 const app = express();
 
-// Ensure your router is mounted correctly in your main app.js/server.js:
+// Ensure your router is mounted correctly in your main server.js:
 app.use('/api/v1', router);  // Assuming you're using an /api/v1 prefix
 
 // 404 Handler - Place this AFTER mounting your router

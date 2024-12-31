@@ -24,16 +24,24 @@ const CartSchema = new mongoose.Schema({
     }
 });
 
-// Calculate cart total
+// Here's where we define the calculateTotal method
 CartSchema.methods.calculateTotal = async function () {
-    let total = 0;
-    for (let item of this.items) {
-        const product = await mongoose.model('Product').findById(item.product);
-        if (product) {
-            total += product.price * item.quantity;
-        }
+    // First, make sure the products are populated
+    if (!this.populated('items.product')) {
+        await this.populate('items.product', 'price');
     }
-    return total;
+
+    // Calculate the total by reducing over the items array
+    const total = this.items.reduce((sum, item) => {
+        // Make sure both the item and its associated product exist
+        if (item && item.product && item.product.price) {
+            return sum + (item.product.price * item.quantity);
+        }
+        return sum;
+    }, 0);
+
+    // Return the total rounded to 2 decimal places for currency
+    return Number(total.toFixed(2));
 };
 
 module.exports = mongoose.model('Cart', CartSchema);
