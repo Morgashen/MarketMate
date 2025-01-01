@@ -1,4 +1,3 @@
-// server.js - Main application server file
 require('dotenv').config();
 const express = require('express');
 const config = require('config');

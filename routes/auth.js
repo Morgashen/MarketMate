@@ -51,7 +51,7 @@ router.post('/register', validate(registerValidation), async (req, res) => {
             payload,
             config.get('jwtSecret'),
             {
-                expiresIn: '24h',
+                expiresIn: '72h',
                 algorithm: 'HS256',
                 audience: config.get('jwtAudience'),
                 issuer: config.get('jwtIssuer')
