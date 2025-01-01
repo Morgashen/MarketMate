@@ -13,65 +13,51 @@ const { errorHandler } = require('./middleware/errorHandler');
 
 class Server {
     constructor() {
-        // Initialize core server properties
         this.app = express();
         this.environment = process.env.NODE_ENV || 'development';
         this.port = process.env.PORT || 5000;
         this.server = null;
         this.startupTime = Date.now();
 
-        // Database health tracking
+        // Database monitoring
         this.dbHealthy = false;
         this.lastDbCheck = null;
-        this.dbCheckInterval = 30000; // 30 seconds
+        this.dbCheckInterval = 30000;
 
-        // Server metrics
-        this.metrics = {
-            requestsTotal: 0,
-            requestsActive: 0,
-            errors: 0,
-            lastRestart: new Date().toISOString()
-        };
-
-        // Initialize server components
         this.initialize();
     }
 
     initialize() {
-        // Configure basic Express settings
+        // Core Express configuration
         this.app.set('case sensitive routing', false);
         this.app.set('strict routing', false);
-        this.app.set('trust proxy', 1); // Important for rate limiting behind proxies
+        this.app.set('trust proxy', 1);
 
-        // Setup core functionality in the correct order
+        // Setup order matters
         this.setupRequestHandling();
         this.setupSecurity();
-        this.setupMetrics();
         this.setupRoutes();
         this.setupErrorHandling();
     }
 
     setupRequestHandling() {
-        // Handle request tracking and timing
+        // Request tracking middleware
         this.app.use((req, res, next) => {
             req.id = crypto.randomUUID();
             req.startTime = Date.now();
 
-            // Wrap send method to ensure headers are set only once
             const originalSend = res.send;
             res.send = function (...args) {
                 if (!res.headersSent) {
                     res.setHeader('X-Request-ID', req.id);
-                    const duration = Date.now() - req.startTime;
-                    res.setHeader('X-Response-Time', `${duration}ms`);
+                    res.setHeader('X-Response-Time', `${Date.now() - req.startTime}ms`);
                 }
                 return originalSend.apply(this, args);
             };
-
             next();
         });
 
-        // Normalize URLs
+        // URL normalization
         this.app.use((req, res, next) => {
             req.url = req.url.toLowerCase();
             if (req.url.endsWith('/') && req.url.length > 1) {
@@ -80,13 +66,13 @@ class Server {
             next();
         });
 
-        // Setup database connection
+        // Database initialization
         if (this.environment !== 'test') {
             this.connectDatabase();
             this.setupDatabaseHealthCheck();
         }
 
-        // Configure request parsing with enhanced error handling
+        // Request parsing
         this.app.use(express.json({
             limit: '10mb',
             verify: (req, res, buf) => {
@@ -104,10 +90,8 @@ class Server {
                 }
             }
         }));
-
         this.app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-        // Setup logging based on environment
         this.setupLogging();
     }
 
@@ -115,7 +99,6 @@ class Server {
         morgan.token('reqId', (req) => req.id);
         morgan.token('body', (req) => {
             const sanitizedBody = { ...req.body };
-            // Remove sensitive data from logs
             ['password', 'token', 'apiKey', 'secret'].forEach(key => {
                 if (sanitizedBody[key]) sanitizedBody[key] = '****';
             });
@@ -127,12 +110,16 @@ class Server {
             : ':reqId :remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length]';
 
         this.app.use(morgan(logFormat, {
-            skip: (req) => req.url === '/health' || req.url === '/metrics'
+            skip: (req) => req.url === '/health',
+            stream: {
+                write: (message) => {
+                    console.log(message.trim());
+                }
+            }
         }));
     }
 
     setupSecurity() {
-        // Configure Helmet security middleware
         const helmetOptions = {
             contentSecurityPolicy: {
                 directives: {
@@ -166,9 +153,9 @@ class Server {
 
         this.app.use(helmet(helmetOptions));
 
-        // Configure rate limiting
+        // Rate limiting
         const standardLimiter = rateLimit({
-            windowMs: 15 * 60 * 1000, // 15 minutes
+            windowMs: 15 * 60 * 1000,
             max: 100,
             standardHeaders: true,
             legacyHeaders: false,
@@ -192,7 +179,7 @@ class Server {
         this.app.use('/api/', standardLimiter);
         this.app.use('/api/auth', authLimiter);
 
-        // Configure CORS
+        // CORS configuration
         const corsOptions = {
             origin: this.environment === 'production'
                 ? config.get('allowedOrigins')
@@ -204,82 +191,86 @@ class Server {
                 'X-Response-Time',
                 'X-RateLimit-Limit',
                 'X-RateLimit-Remaining',
-                'X-RateLimit-Reset',
-                'x-total-count',
-                'x-pagination'
+                'X-RateLimit-Reset'
             ],
             credentials: true,
-            maxAge: 600 // 10 minutes
+            maxAge: 600
         };
 
         this.app.use(cors(corsOptions));
     }
 
-    setupMetrics() {
-        // Track request metrics
-        this.app.use((req, res, next) => {
-            this.metrics.requestsTotal++;
-            this.metrics.requestsActive++;
+    setupRoutes() {
+        const apiRouter = express.Router({ mergeParams: true });
 
-            res.on('finish', () => {
-                this.metrics.requestsActive--;
-                if (res.statusCode >= 400) {
-                    this.metrics.errors++;
-                }
+        // Debug middleware for API routes
+        apiRouter.use((req, res, next) => {
+            console.log('API Request:', {
+                method: req.method,
+                path: req.path,
+                originalUrl: req.originalUrl,
+                params: req.params,
+                query: req.query,
+                timestamp: new Date().toISOString()
             });
-
             next();
         });
 
-        // Metrics endpoint
-        this.app.get('/metrics', (req, res) => {
-            const metrics = {
-                requests: {
-                    total: this.metrics.requestsTotal,
-                    active: this.metrics.requestsActive,
-                    errors: this.metrics.errors
-                },
-                system: {
-                    uptime: {
-                        seconds: process.uptime(),
-                        formatted: this.formatUptime(process.uptime() * 1000)
-                    },
-                    memory: this.formatMemoryUsage(),
-                    node: process.version
-                },
-                server: {
-                    environment: this.environment,
-                    startTime: new Date(this.startupTime).toISOString(),
-                    uptime: this.formatUptime(Date.now() - this.startupTime),
-                    lastRestart: this.metrics.lastRestart
+        // Configure route handlers with improved error handling
+        const routeModules = {
+            auth: './routes/auth',
+            products: './routes/products',
+            cart: './routes/cart',
+            orders: './routes/orders',
+            shipments: './routes/shipments',
+            payments: './routes/payments'
+        };
+
+        Object.entries(routeModules).forEach(([name, path]) => {
+            try {
+                const router = require(path);
+                if (!router || typeof router !== 'function') {
+                    throw new Error(`Invalid router exported from ${path}`);
                 }
-            };
-
-            res.json(metrics);
+                apiRouter.use(`/${name}`, router);
+                console.log(`Successfully mounted ${name} routes from ${path}`);
+            } catch (error) {
+                console.error(`Failed to load ${name} routes from ${path}:`, error);
+                const placeholderRouter = express.Router();
+                placeholderRouter.all('*', (req, res) => {
+                    res.status(503).json({
+                        status: 'error',
+                        message: `${name} service is temporarily unavailable`,
+                        error: this.environment === 'development' ? error.message : undefined
+                    });
+                });
+                apiRouter.use(`/${name}`, placeholderRouter);
+            }
         });
-    }
 
-    setupRoutes() {
-        const apiPrefix = '/api';
+        // Mount API router
+        this.app.use('/api', apiRouter);
 
-        // Core API routes
-        this.app.use(`${apiPrefix}/auth`, require('./routes/auth'));
-        this.app.use(`${apiPrefix}/products`, require('./routes/products'));
-        this.app.use(`${apiPrefix}/cart`, require('./routes/cart'));
-        this.app.use(`${apiPrefix}/orders`, require('./routes/orders'));
-        this.app.use(`${apiPrefix}/shipments`, require('./routes/shipments'));
-        this.app.use(`${apiPrefix}/payments`, require('./routes/payments'));
-
-        // API documentation route
+        // Documentation route
         this.app.get('/', (req, res) => {
             const apiInfo = getApiInfo(this.environment);
             const htmlContent = renderApiDocumentation(apiInfo);
             res.setHeader('Content-Type', 'text/html');
+            res.setHeader('Cache-Control', 'no-store');
             res.send(htmlContent);
         });
 
         // Health check routes
         this.setupHealthChecks();
+
+        // Catch-all route for unhandled API endpoints
+        apiRouter.use('*', (req, res) => {
+            res.status(404).json({
+                status: 'error',
+                message: `API endpoint ${req.originalUrl} not found`,
+                suggestedEndpoints: Object.keys(routeModules).map(route => `/api/${route}`)
+            });
+        });
     }
 
     setupHealthChecks() {
@@ -288,30 +279,19 @@ class Server {
                 const dbStatus = await this.checkDatabaseHealth();
                 const uptime = Date.now() - this.startupTime;
 
-                const systemHealth = {
+                res.status(dbStatus ? 200 : 503).json({
                     status: dbStatus ? 'healthy' : 'degraded',
                     timestamp: new Date().toISOString(),
                     environment: this.environment,
-                    uptime: {
-                        ms: uptime,
-                        formatted: this.formatUptime(uptime)
-                    },
+                    uptime,
                     services: {
                         database: {
                             status: dbStatus ? 'connected' : 'disconnected',
                             lastCheck: this.lastDbCheck,
                             latency: await this.checkDbLatency()
-                        },
-                        api: {
-                            memory: this.formatMemoryUsage(),
-                            uptime: process.uptime(),
-                            pid: process.pid,
-                            nodeVersion: process.version
                         }
                     }
-                };
-
-                res.status(dbStatus ? 200 : 503).json(systemHealth);
+                });
             } catch (error) {
                 console.error('Health check failed:', error);
                 res.status(500).json({
@@ -326,53 +306,40 @@ class Server {
     }
 
     setupErrorHandling() {
-        // Handle 404 errors
+        // 404 handler
         this.app.use((req, res, next) => {
-            if (req.url === '/favicon.ico') {
-                return res.status(204).end();
-            }
             const error = new Error(`Route ${req.url} not found`);
             error.status = 404;
+            error.statusCode = 404;
             next(error);
         });
 
         // Global error handler
-        this.app.use(errorHandler(this.environment));
-    }
-
-    // Utility methods
-    formatMemoryUsage() {
-        const memory = process.memoryUsage();
-        return {
-            heapUsed: this.formatBytes(memory.heapUsed),
-            heapTotal: this.formatBytes(memory.heapTotal),
-            rss: this.formatBytes(memory.rss),
-            external: this.formatBytes(memory.external)
-        };
-    }
-
-    formatBytes(bytes) {
-        if (bytes === 0) return '0 Bytes';
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-    }
-
-    formatUptime(ms) {
-        const seconds = Math.floor(ms / 1000);
-        const minutes = Math.floor(seconds / 60);
-        const hours = Math.floor(minutes / 60);
-        const days = Math.floor(hours / 24);
-        return `${days}d ${hours % 24}h ${minutes % 60}m ${seconds % 60}s`;
-    }
-
-    // Database methods
-    connectDatabase() {
-        connectDB().catch(error => {
-            console.error('Database connection failed:', error);
-            process.exit(1);
+        this.app.use((error, req, res, next) => {
+            const status = error.status || 500;
+            res.status(status).json({
+                status,
+                message: error.message,
+                error: {
+                    status: error.status || 500,
+                    statusCode: error.statusCode || error.status || 500
+                },
+                stack: this.environment === 'development' ? error.stack : undefined
+            });
         });
+    }
+
+    connectDatabase() {
+        if (this.environment !== 'test') {
+            connectDB().catch(error => {
+                console.error('Database connection failed:', error);
+                process.exit(1);
+            });
+        }
+    }
+
+    setupDatabaseHealthCheck() {
+        setInterval(() => this.checkDatabaseHealth(), this.dbCheckInterval);
     }
 
     async checkDatabaseHealth() {
@@ -401,11 +368,6 @@ class Server {
         }
     }
 
-    setupDatabaseHealthCheck() {
-        setInterval(() => this.checkDatabaseHealth(), this.dbCheckInterval);
-    }
-
-    // Server lifecycle methods
     async start() {
         return new Promise((resolve, reject) => {
             try {
@@ -419,8 +381,6 @@ class Server {
                         `);
                         resolve(this.server);
                     });
-
-                    this.setupProcessHandlers();
                 } else {
                     resolve(this.app);
                 }
@@ -431,30 +391,10 @@ class Server {
         });
     }
 
-    setupProcessHandlers() {
-        // Handle unhandled promise rejections
-        process.on('unhandledRejection', (error) => {
-            console.error('Unhandled Promise Rejection:', error);
-            this.gracefulShutdown('UNHANDLED_REJECTION');
-        });
-
-        // Handle uncaught exceptions
-        process.on('uncaughtException', (error) => {
-            console.error('Uncaught Exception:', error);
-            this.gracefulShutdown('UNCAUGHT_EXCEPTION');
-        });
-
-        // Handle termination signals
-        ['SIGTERM', 'SIGINT'].forEach(signal => {
-            process.on(signal, () => this.gracefulShutdown(signal));
-        });
-    }
-
     async gracefulShutdown(signal) {
         console.log(`\n${signal} received. Starting graceful shutdown...`);
 
         try {
-            // First, stop accepting new requests by closing the server
             if (this.server) {
                 await new Promise((resolve) => {
                     this.server.close(resolve);
@@ -462,18 +402,10 @@ class Server {
                 console.log('Server closed successfully');
             }
 
-            // Next, wait for any pending database operations to complete
             if (mongoose.connection.readyState === 1) {
                 await mongoose.connection.close();
                 console.log('Database connection closed successfully');
             }
-
-            // Log final metrics before shutdown
-            console.log('Final server metrics:', {
-                totalRequests: this.metrics.requestsTotal,
-                totalErrors: this.metrics.errors,
-                uptime: this.formatUptime(Date.now() - this.startupTime)
-            });
 
             console.log('Graceful shutdown completed');
             process.exit(0);
@@ -484,12 +416,9 @@ class Server {
     }
 }
 
-// Create and export server instance with error handling
 const createServer = () => {
     try {
         const server = new Server();
-
-        // Export a clean interface for external use
         return {
             app: server.app,
             start: () => server.start(),
@@ -502,7 +431,6 @@ const createServer = () => {
     }
 };
 
-// Start server if not in test mode
 if (process.env.NODE_ENV !== 'test') {
     const { start } = createServer();
     start().catch(error => {

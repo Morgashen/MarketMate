@@ -1,127 +1,283 @@
 const express = require('express');
 const router = express.Router();
 const auth = require('../middleware/auth');
+const mongoose = require('mongoose');
 const Shipment = require('../models/Shipment');
 const Order = require('../models/Order');
 const { check, validationResult } = require('express-validator');
 
-// Create shipment for an order
-router.post('/', [auth, [
-    check('orderId', 'Order ID is required').notEmpty(),
-    check('carrier', 'Valid carrier is required').isIn(['USPS', 'FedEx', 'UPS', 'DHL']),
-    check('trackingNumber', 'Tracking number is required').notEmpty(),
-    check('shippingMethod', 'Valid shipping method is required').isIn(['standard', 'express', 'overnight'])
-]], async (req, res) => {
+// Debug middleware for API route tracking
+router.use((req, res, next) => {
+    console.log('API Request:', {
+        method: req.method,
+        path: req.path,
+        originalUrl: req.originalUrl,
+        params: req.params,
+        query: req.query
+    });
+    next();
+});
+
+// Get all shipments for an order
+router.get('/order/:orderId', auth, async (req, res) => {
+    try {
+        const { orderId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(orderId)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid order ID format'
+            });
+        }
+
+        const shipments = await Shipment.find({ order: orderId })
+            .sort('-createdAt')
+            .populate('order')
+            .populate('user', '-password');
+
+        return res.status(200).json({
+            status: 'success',
+            data: { shipments }
+        });
+    } catch (error) {
+        console.error('Error fetching shipments:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch shipments',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Create new shipment for order
+router.post('/order/:orderId', auth, [
+    check('paymentMethodId', 'Payment method ID is required').notEmpty(),
+    check('paymentIntentId', 'Payment intent ID is required').notEmpty()
+], async (req, res) => {
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid input data',
+                errors: errors.array()
+            });
         }
 
-        const order = await Order.findById(req.body.orderId);
+        const { orderId } = req.params;
+        const { paymentMethodId, paymentIntentId } = req.body;
+        const userId = req.user.id;
+
+        if (!mongoose.Types.ObjectId.isValid(orderId)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid order ID format'
+            });
+        }
+
+        const order = await Order.findById(orderId);
         if (!order) {
-            return res.status(404).json({ message: 'Order not found' });
+            return res.status(404).json({
+                status: 'error',
+                message: 'Order not found'
+            });
         }
 
         const shipment = new Shipment({
-            order: order._id,
-            tracking: {
-                carrier: req.body.carrier,
-                trackingNumber: req.body.trackingNumber,
-                estimatedDelivery: req.body.estimatedDelivery
-            },
-            shippingAddress: order.shippingAddress,
-            shippingMethod: req.body.shippingMethod,
-            weight: req.body.weight,
-            dimensions: req.body.dimensions,
+            order: orderId,
+            user: userId,
+            paymentMethodId,
+            paymentIntentId,
+            status: 'pending',
             statusHistory: [{
                 status: 'pending',
+                timestamp: new Date(),
                 notes: 'Shipment created'
-            }]
+            }],
+            shippingAddress: order.shippingAddress
         });
 
-        await shipment.save();
+        const savedShipment = await shipment.save();
+        await Order.findByIdAndUpdate(orderId, {
+            status: 'processing',
+            shipment: savedShipment._id
+        });
 
-        // Update order status
-        order.status = 'shipped';
-        await order.save();
-
-        res.status(201).json(shipment);
+        return res.status(201).json({
+            status: 'success',
+            message: 'Shipment created successfully',
+            data: {
+                shipment: {
+                    id: savedShipment._id,
+                    status: savedShipment.status,
+                    orderId: savedShipment.order
+                }
+            }
+        });
     } catch (error) {
-        console.error('Shipment creation error:', error);
-        res.status(500).json({ message: 'Error creating shipment' });
+        console.error('Error creating shipment:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: 'Failed to create shipment',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Get shipment by ID
+router.get('/:shipmentId', auth, async (req, res) => {
+    try {
+        const { shipmentId } = req.params;
+
+        if (!mongoose.Types.ObjectId.isValid(shipmentId)) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid shipment ID format'
+            });
+        }
+
+        const shipment = await Shipment.findById(shipmentId)
+            .populate('order')
+            .populate('user', '-password');
+
+        if (!shipment) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Shipment not found'
+            });
+        }
+
+        return res.status(200).json({
+            status: 'success',
+            data: {
+                shipment
+            }
+        });
+    } catch (error) {
+        console.error('Error fetching shipment:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: 'Failed to fetch shipment details',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+});
+
+// Update shipment tracking information
+router.put('/:shipmentId/tracking', auth, [
+    check('carrier', 'Carrier is required').isIn(['USPS', 'FedEx', 'UPS', 'DHL']),
+    check('trackingNumber', 'Tracking number is required').notEmpty(),
+    check('shippingMethod', 'Shipping method is required').isIn(['standard', 'express', 'overnight'])
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid input data',
+                errors: errors.array()
+            });
+        }
+
+        const { shipmentId } = req.params;
+        const { carrier, trackingNumber, shippingMethod, estimatedDelivery } = req.body;
+
+        const shipment = await Shipment.findById(shipmentId);
+        if (!shipment) {
+            return res.status(404).json({
+                status: 'error',
+                message: 'Shipment not found'
+            });
+        }
+
+        shipment.tracking = {
+            carrier,
+            trackingNumber,
+            estimatedDelivery: estimatedDelivery || null
+        };
+        shipment.shippingMethod = shippingMethod;
+        shipment.status = 'processing';
+        shipment.statusHistory.push({
+            status: 'processing',
+            timestamp: new Date(),
+            notes: `Tracking information added: ${carrier} - ${trackingNumber}`
+        });
+
+        const updatedShipment = await shipment.save();
+
+        return res.status(200).json({
+            status: 'success',
+            message: 'Tracking information updated successfully',
+            data: {
+                shipment: updatedShipment
+            }
+        });
+    } catch (error) {
+        console.error('Error updating tracking information:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: 'Failed to update tracking information',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 });
 
 // Update shipment status
-router.patch('/:id/status', [auth, [
+router.patch('/:shipmentId/status', auth, [
     check('status', 'Valid status is required').isIn([
-        'processing', 'shipped', 'in_transit', 'out_for_delivery',
-        'delivered', 'failed_delivery', 'returned'
+        'pending', 'processing', 'shipped', 'delivered', 'cancelled'
     ]),
-    check('location', 'Location is required').notEmpty()
-]], async (req, res) => {
+    check('notes', 'Status update notes are required').notEmpty()
+], async (req, res) => {
     try {
         const errors = validationResult(req);
         if (!errors.isEmpty()) {
-            return res.status(400).json({ errors: errors.array() });
+            return res.status(400).json({
+                status: 'error',
+                message: 'Invalid input data',
+                errors: errors.array()
+            });
         }
 
-        const shipment = await Shipment.findById(req.params.id);
+        const { shipmentId } = req.params;
+        const { status, notes } = req.body;
+
+        const shipment = await Shipment.findById(shipmentId);
         if (!shipment) {
-            return res.status(404).json({ message: 'Shipment not found' });
+            return res.status(404).json({
+                status: 'error',
+                message: 'Shipment not found'
+            });
         }
 
-        shipment.status = req.body.status;
+        shipment.status = status;
         shipment.statusHistory.push({
-            status: req.body.status,
-            location: req.body.location,
-            notes: req.body.notes
+            status,
+            timestamp: new Date(),
+            notes
         });
 
-        if (req.body.status === 'delivered') {
+        if (status === 'delivered') {
             shipment.tracking.actualDelivery = new Date();
-            const order = await Order.findById(shipment.order);
-            if (order) {
-                order.status = 'delivered';
-                await order.save();
+            await Order.findByIdAndUpdate(shipment.order, { status: 'delivered' });
+        }
+
+        const updatedShipment = await shipment.save();
+
+        return res.status(200).json({
+            status: 'success',
+            message: 'Shipment status updated successfully',
+            data: {
+                shipment: updatedShipment
             }
-        }
-
-        await shipment.save();
-        res.json(shipment);
+        });
     } catch (error) {
-        console.error('Shipment update error:', error);
-        res.status(500).json({ message: 'Error updating shipment' });
-    }
-});
-
-// Get shipment details
-router.get('/:id', auth, async (req, res) => {
-    try {
-        const shipment = await Shipment.findById(req.params.id)
-            .populate('order');
-
-        if (!shipment) {
-            return res.status(404).json({ message: 'Shipment not found' });
-        }
-
-        res.json(shipment);
-    } catch (error) {
-        console.error('Shipment fetch error:', error);
-        res.status(500).json({ message: 'Error fetching shipment' });
-    }
-});
-
-// Get shipments for an order
-router.get('/order/:orderId', auth, async (req, res) => {
-    try {
-        const shipments = await Shipment.find({ order: req.params.orderId })
-            .sort('-createdAt');
-        res.json(shipments);
-    } catch (error) {
-        console.error('Shipments fetch error:', error);
-        res.status(500).json({ message: 'Error fetching shipments' });
+        console.error('Error updating shipment status:', error);
+        return res.status(500).json({
+            status: 'error',
+            message: 'Failed to update shipment status',
+            details: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
     }
 });
 

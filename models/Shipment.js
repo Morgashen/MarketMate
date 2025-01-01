@@ -1,98 +1,59 @@
 const mongoose = require('mongoose');
 
-const ShipmentSchema = new mongoose.Schema({
+const shipmentSchema = new mongoose.Schema({
     order: {
         type: mongoose.Schema.Types.ObjectId,
         ref: 'Order',
         required: true
     },
-    tracking: {
-        carrier: {
-            type: String,
-            required: true,
-            enum: ['USPS', 'FedEx', 'UPS', 'DHL']
-        },
-        trackingNumber: {
-            type: String,
-            required: true
-        },
-        estimatedDelivery: Date,
-        actualDelivery: Date
+    user: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: 'User',
+        required: true
+    },
+    paymentMethodId: {
+        type: String,
+        required: true
+    },
+    paymentIntentId: {
+        type: String,
+        required: true
     },
     status: {
         type: String,
-        required: true,
-        enum: ['pending', 'processing', 'shipped', 'in_transit', 'out_for_delivery', 'delivered', 'failed_delivery', 'returned'],
+        enum: ['pending', 'processing', 'shipped', 'delivered', 'cancelled'],
         default: 'pending'
     },
-    shippingAddress: {
-        street: {
+    tracking: {
+        carrier: {
             type: String,
-            required: true
+            enum: ['USPS', 'FedEx', 'UPS', 'DHL']
         },
-        city: {
-            type: String,
-            required: true
-        },
-        state: {
-            type: String,
-            required: true
-        },
-        zipCode: {
-            type: String,
-            required: true
-        },
-        country: {
-            type: String,
-            required: true
-        }
+        trackingNumber: String,
+        estimatedDelivery: Date,
+        actualDelivery: Date
     },
     shippingMethod: {
         type: String,
-        required: true,
         enum: ['standard', 'express', 'overnight']
     },
-    weight: {
-        value: Number,
-        unit: {
-            type: String,
-            enum: ['kg', 'lb']
-        }
-    },
-    dimensions: {
-        length: Number,
-        width: Number,
-        height: Number,
-        unit: {
-            type: String,
-            enum: ['cm', 'in']
-        }
+    shippingAddress: {
+        street: String,
+        city: String,
+        state: String,
+        postalCode: String,
+        country: String
     },
     statusHistory: [{
-        status: {
-            type: String,
-            required: true
-        },
-        location: String,
+        status: String,
         timestamp: {
             type: Date,
             default: Date.now
         },
         notes: String
-    }],
-    createdAt: {
-        type: Date,
-        default: Date.now
-    },
-    updatedAt: {
-        type: Date,
-        default: Date.now
-    }
+    }]
+}, {
+    timestamps: true
 });
 
-ShipmentSchema.pre('save', function (next) {
-    this.updatedAt = new Date();
-    next();
-});
-
-module.exports = mongoose.model('Shipment', ShipmentSchema);
+module.exports = mongoose.model('Shipment', shipmentSchema);
