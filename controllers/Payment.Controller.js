@@ -1,6 +1,7 @@
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const Order = require('../models/Order');
 const User = require('../models/User');
+const Payment = require('../models/Payment');
 
 class PaymentController {
   // @desc    Create payment intent
@@ -15,6 +16,15 @@ class PaymentController {
         metadata: {
           userId: req.user.id
         }
+      });
+
+      // Save initial payment record
+      await Payment.create({
+        userId: req.user.id,
+        paymentIntentId: paymentIntent.id,
+        amount,
+        currency,
+        status: 'pending'
       });
 
       res.json({
@@ -38,6 +48,13 @@ class PaymentController {
         { payment_method: paymentMethodId }
       );
 
+      // Update payment status in the database
+      await Payment.findOneAndUpdate(
+        { paymentIntentId },
+        { status: paymentIntent.status, paymentMethodId },
+        { new: true }
+      );
+
       res.json({ paymentIntent });
     } catch (err) {
       console.error('Payment confirmation error:', err);
@@ -49,30 +66,22 @@ class PaymentController {
   // @route   POST /api/payments/refund
   static async processRefund(req, res) {
     try {
-      const { orderId, amount, reason } = req.body;
-
-      const order = await Order.findById(orderId);
-      if (!order) {
-        return res.status(404).json({ message: 'Order not found' });
-      }
+      const { paymentIntentId, amount, reason } = req.body;
 
       const refund = await stripe.refunds.create({
-        payment_intent: order.paymentIntent,
+        payment_intent: paymentIntentId,
         amount: amount ? Math.round(amount * 100) : undefined,
         reason: reason || 'requested_by_customer'
       });
 
-      // Update order with refund information
-      order.refund = {
-        refundId: refund.id,
-        amount: amount || order.total,
-        reason,
-        date: new Date()
-      };
-      order.status = 'refunded';
-      await order.save();
+      // Update payment with refund details
+      const payment = await Payment.findOneAndUpdate(
+        { paymentIntentId },
+        { refunded: true, status: 'refunded' },
+        { new: true }
+      );
 
-      res.json({ refund, order });
+      res.json({ refund, payment });
     } catch (err) {
       console.error('Refund processing error:', err);
       res.status(500).json({ message: 'Error processing refund' });

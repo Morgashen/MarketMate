@@ -1,9 +1,9 @@
 const request = require('supertest');
 const mongoose = require('mongoose');
 const { MongoMemoryServer } = require('mongodb-memory-server');
-const app = require('../server'); // Adjust the path as needed
-const Payment = require('../models/Payment'); // Adjust the path as needed
-const Order = require('../models/Order'); // Adjust the path as needed
+const app = require('../server');
+const Payment = require('../models/Payment');
+const Order = require('../models/Order');
 
 // Mock data for my tests
 const validPaymentData = {
@@ -261,7 +261,14 @@ describe('Payment API Integration Tests', () => {
         test('should validate required fields', async () => {
             const incompletePaymentData = {
                 amount: 99.99,
-                // Missing other required fields
+                currency: 'usd',
+                paymentMethod: 'credit_card',
+                cardDetails: {
+                    last4: '4242',
+                    brand: 'visa',
+                    expiryMonth: 12,
+                    expiryYear: 2025
+                }
             };
 
             const response = await request(app)
