@@ -1,5 +1,4 @@
-// utils/documentation.js
-
+// Get API information based on environment
 const getApiInfo = (environment) => {
     return {
         title: 'MarketMate API Documentation',
@@ -114,74 +113,6 @@ const getApiInfo = (environment) => {
                                     category: 'string'
                                 }
                             },
-                            404: { message: 'Product not found' },
-                            500: { message: 'Internal server error' }
-                        }
-                    },
-                    {
-                        path: '/',
-                        method: 'POST',
-                        description: 'Create new product',
-                        auth: true,
-                        body: {
-                            name: 'string (required)',
-                            description: 'string (required)',
-                            price: 'number (required)',
-                            image: 'string (required)',
-                            stock: 'number (required)',
-                            category: 'string (required)'
-                        },
-                        responses: {
-                            201: {
-                                success: true,
-                                data: 'Product object'
-                            },
-                            400: { message: 'Validation errors' },
-                            401: { message: 'Not authorized' },
-                            500: { message: 'Internal server error' }
-                        }
-                    },
-                    {
-                        path: '/:id',
-                        method: 'PUT',
-                        description: 'Update product',
-                        auth: true,
-                        params: {
-                            id: 'string (product ID)'
-                        },
-                        body: {
-                            name: 'string',
-                            description: 'string',
-                            price: 'number',
-                            image: 'string',
-                            stock: 'number',
-                            category: 'string'
-                        },
-                        responses: {
-                            200: {
-                                success: true,
-                                data: 'Updated product object'
-                            },
-                            400: { message: 'Validation errors' },
-                            401: { message: 'Not authorized' },
-                            404: { message: 'Product not found' },
-                            500: { message: 'Internal server error' }
-                        }
-                    },
-                    {
-                        path: '/:id',
-                        method: 'DELETE',
-                        description: 'Delete product',
-                        auth: true,
-                        params: {
-                            id: 'string (product ID)'
-                        },
-                        responses: {
-                            200: {
-                                success: true,
-                                message: 'Product deleted'
-                            },
-                            401: { message: 'Not authorized' },
                             404: { message: 'Product not found' },
                             500: { message: 'Internal server error' }
                         }
@@ -352,6 +283,49 @@ const getApiInfo = (environment) => {
                             401: { message: 'Not authorized' },
                             500: { message: 'Internal server error' }
                         }
+                    },
+                    {
+                        path: '/:id',
+                        method: 'PUT',
+                        description: 'Update order status',
+                        auth: true,
+                        params: {
+                            id: 'string (order ID)'
+                        },
+                        body: {
+                            status: 'string (required)',
+                            trackingNumber: 'string',
+                            notes: 'string'
+                        },
+                        responses: {
+                            200: {
+                                success: true,
+                                data: 'Updated order object'
+                            },
+                            400: { message: 'Validation errors' },
+                            401: { message: 'Not authorized' },
+                            404: { message: 'Order not found' },
+                            500: { message: 'Internal server error' }
+                        }
+                    },
+                    {
+                        path: '/:id',
+                        method: 'DELETE',
+                        description: 'Cancel order',
+                        auth: true,
+                        params: {
+                            id: 'string (order ID)'
+                        },
+                        responses: {
+                            200: {
+                                success: true,
+                                message: 'Order cancelled'
+                            },
+                            400: { message: 'Order cannot be cancelled' },
+                            401: { message: 'Not authorized' },
+                            404: { message: 'Order not found' },
+                            500: { message: 'Internal server error' }
+                        }
                     }
                 ]
             },
@@ -389,6 +363,50 @@ const getApiInfo = (environment) => {
                                 success: true,
                                 data: 'Shipment object'
                             },
+                            401: { message: 'Not authorized' },
+                            404: { message: 'Shipment not found' },
+                            500: { message: 'Internal server error' }
+                        }
+                    },
+                    {
+                        path: '/:id',
+                        method: 'PUT',
+                        description: 'Update shipment status',
+                        auth: true,
+                        params: {
+                            id: 'string (shipment ID)'
+                        },
+                        body: {
+                            status: 'string (required)',
+                            trackingNumber: 'string',
+                            carrier: 'string',
+                            estimatedDelivery: 'date'
+                        },
+                        responses: {
+                            200: {
+                                success: true,
+                                data: 'Updated shipment object'
+                            },
+                            400: { message: 'Validation errors' },
+                            401: { message: 'Not authorized' },
+                            404: { message: 'Shipment not found' },
+                            500: { message: 'Internal server error' }
+                        }
+                    },
+                    {
+                        path: '/:id',
+                        method: 'DELETE',
+                        description: 'Cancel shipment',
+                        auth: true,
+                        params: {
+                            id: 'string (shipment ID)'
+                        },
+                        responses: {
+                            200: {
+                                success: true,
+                                message: 'Shipment cancelled'
+                            },
+                            400: { message: 'Shipment cannot be cancelled' },
                             401: { message: 'Not authorized' },
                             404: { message: 'Shipment not found' },
                             500: { message: 'Internal server error' }
@@ -473,6 +491,48 @@ const getApiInfo = (environment) => {
                             401: { message: 'Not authorized' },
                             500: { message: 'Internal server error' }
                         }
+                    },
+                    {
+                        path: '/payment-methods/:id',
+                        method: 'PUT',
+                        description: 'Update payment method',
+                        auth: true,
+                        params: {
+                            id: 'string (payment method ID)'
+                        },
+                        body: {
+                            isDefault: 'boolean',
+                            expirationDate: 'string',
+                            billingAddress: 'object'
+                        },
+                        responses: {
+                            200: {
+                                success: true,
+                                data: 'Updated payment method object'
+                            },
+                            400: { message: 'Validation errors' },
+                            401: { message: 'Not authorized' },
+                            404: { message: 'Payment method not found' },
+                            500: { message: 'Internal server error' }
+                        }
+                    },
+                    {
+                        path: '/payment-methods/:id',
+                        method: 'DELETE',
+                        description: 'Remove payment method',
+                        auth: true,
+                        params: {
+                            id: 'string (payment method ID)'
+                        },
+                        responses: {
+                            200: {
+                                success: true,
+                                message: 'Payment method removed'
+                            },
+                            401: { message: 'Not authorized' },
+                            404: { message: 'Payment method not found' },
+                            500: { message: 'Internal server error' }
+                        }
                     }
                 ]
             }
@@ -480,7 +540,53 @@ const getApiInfo = (environment) => {
     };
 };
 
+// Renders comprehensive API documentation with clean styling
 const renderApiDocumentation = (apiInfo) => {
+    const renderEndpoint = (route, baseUrl) => {
+        return `
+            <div class="endpoint">
+                <div class="endpoint-header">
+                    <span class="method ${route.method.toLowerCase()}">${route.method}</span>
+                    <code class="path">${baseUrl}${route.path}</code>
+                    ${route.auth ? '<span class="auth-tag">Auth Required</span>' : ''}
+                </div>
+                
+                <p class="description">${route.description}</p>
+                
+                ${route.params ? `
+                    <div class="section">
+                        <h4>Path Parameters</h4>
+                        <code class="block">${JSON.stringify(route.params, null, 2)}</code>
+                    </div>
+                ` : ''}
+
+                ${route.query ? `
+                    <div class="section">
+                        <h4>Query Parameters</h4>
+                        <code class="block">${JSON.stringify(route.query, null, 2)}</code>
+                    </div>
+                ` : ''}
+
+                ${route.body ? `
+                    <div class="section">
+                        <h4>Request Body</h4>
+                        <code class="block">${JSON.stringify(route.body, null, 2)}</code>
+                    </div>
+                ` : ''}
+
+                <div class="section">
+                    <h4>Responses</h4>
+                    ${Object.entries(route.responses).map(([code, response]) => `
+                        <div class="response ${parseInt(code) < 400 ? 'success' : 'error'}">
+                            <div class="response-code">Status ${code}</div>
+                            <code class="block">${JSON.stringify(response, null, 2)}</code>
+                        </div>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    };
+
     return `
 <!DOCTYPE html>
 <html lang="en">
@@ -490,199 +596,151 @@ const renderApiDocumentation = (apiInfo) => {
     <title>${apiInfo.title}</title>
     <style>
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            line-height: 1.6;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            line-height: 1.5;
             margin: 0;
             padding: 20px;
-            color: #333;
-            background-color: #f5f5f5;
+            color: #2c3e50;
         }
+        
         .container {
             max-width: 1200px;
             margin: 0 auto;
-            background-color: white;
-            padding: 30px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-        }
-        .header {
-            border-bottom: 2px solid #eee;
-            margin-bottom: 30px;
-            padding-bottom: 20px;
-        }
-        h1, h2, h3 {
-            color: #2c3e50;
-        }
-        h1 {
-            font-size: 2.5em;
-            margin-bottom: 10px;
-        }
-        h2 {
-            font-size: 1.8em;
-            margin-top: 40px;
-            border-bottom: 1px solid #eee;
-            padding-bottom: 10px;
-        }
-        .endpoint {
-            background: #f8f9fa;
             padding: 20px;
-            margin: 15px 0;
-            border-radius: 8px;
-            border-left: 4px solid #3498db;
         }
+        
+        header {
+            margin-bottom: 40px;
+            padding-bottom: 20px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        h1, h2, h3, h4 {
+            font-weight: 600;
+            color: #1a202c;
+        }
+        
+        .endpoint {
+            margin: 30px 0;
+            padding: 20px;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+        }
+        
+        .endpoint-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+        
         .method {
-            display: inline-block;
-            padding: 6px 12px;
+            padding: 4px 8px;
             border-radius: 4px;
-            color: white;
-            font-weight: bold;
-            min-width: 80px;
+            font-size: 14px;
+            font-weight: 600;
+            border: 1px solid;
+            min-width: 60px;
             text-align: center;
-            margin-right: 10px;
         }
-        .method.get { background-color: #2ecc71; }
-        .method.post { background-color: #3498db; }
-        .method.put { background-color: #f1c40f; }
-        .method.delete { background-color: #e74c3c; }
+        
+        .get { color: #2f855a; border-color: currentColor; }
+        .post { color: #2b6cb0; border-color: currentColor; }
+        .put { color: #975a16; border-color: currentColor; }
+        .delete { color: #c53030; border-color: currentColor; }
+        .patch { color: #2c7a7b; border-color: currentColor; }
+        
         .path {
-            font-family: monospace;
-            font-size: 1.1em;
-            color: #34495e;
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            font-size: 14px;
+            padding: 4px 8px;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
         }
-        .auth-badge {
-            background-color: #95a5a6;
-            color: white;
-            padding: 3px 8px;
-            border-radius: 3px;
-            font-size: 0.9em;
-            margin-left: 10px;
-            vertical-align: middle;
+        
+        .auth-tag {
+            font-size: 12px;
+            color: #718096;
+            border: 1px solid currentColor;
+            padding: 2px 6px;
+            border-radius: 4px;
         }
+        
         .description {
-            margin: 10px 0;
-            color: #666;
+            color: #4a5568;
+            margin: 12px 0;
         }
-        .params-title {
-            font-weight: bold;
-            margin: 15px 0 5px 0;
-            color: #2c3e50;
+        
+        .section {
+            margin: 20px 0;
         }
-        code {
-            background: #ecf0f1;
-            padding: 2px 5px;
-            border-radius: 3px;
-            font-family: monospace;
+        
+        .section h4 {
+            margin: 0 0 8px 0;
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: #718096;
         }
-        pre {
-            background: #2c3e50;
-            color: #ecf0f1;
-            padding: 15px;
-            border-radius: 5px;
+        
+        code.block {
+            display: block;
+            background: none;
+            border: 1px solid #e2e8f0;
+            padding: 12px;
+            border-radius: 4px;
+            font-family: 'SFMono-Regular', Consolas, monospace;
+            font-size: 13px;
+            white-space: pre;
             overflow-x: auto;
         }
+        
         .response {
-            margin: 10px 0;
-            padding: 10px;
-            background: #f8f9fa;
-            border-left: 4px solid;
+            margin: 12px 0;
+            border: 1px solid #e2e8f0;
+            border-radius: 4px;
         }
-        .response.success { border-color: #2ecc71; }
-        .response.error { border-color: #e74c3c; }
-        .navigation {
-            position: fixed;
-            top: 20px;
-            bottom: 20px;
-            left: 20px;
-            width: 250px;
-            overflow-y: auto;
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        
+        .response-code {
+            padding: 8px 12px;
+            font-size: 13px;
+            font-weight: 600;
+            border-bottom: 1px solid #e2e8f0;
         }
-        .content {
-            margin-left: 290px;
-        }
-        @media (max-width: 1200px) {
-            .navigation {
-                display: none;
+        
+        .success .response-code { color: #2f855a; }
+        .error .response-code { color: #c53030; }
+
+        @media (max-width: 768px) {
+            .endpoint-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 8px;
             }
-            .content {
-                margin-left: 0;
+            
+            code.block {
+                font-size: 12px;
             }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
+        <header>
             <h1>${apiInfo.title}</h1>
-            <p>Version: ${apiInfo.version}</p>
-            <p>Environment: ${apiInfo.environment}</p>
+            <p>Version: ${apiInfo.version} | Environment: ${apiInfo.environment}</p>
             <p>Base URL: ${apiInfo.baseUrl}</p>
-        </div>
+        </header>
 
-        <nav class="navigation">
-            <h3>Quick Navigation</h3>
-            ${Object.keys(apiInfo.endpoints).map(category => `
-                <p><a href="#${category}">${category.charAt(0).toUpperCase() + category.slice(1)}</a></p>
-            `).join('')}
-        </nav>
-
-        <div class="content">
+        <main>
             ${Object.entries(apiInfo.endpoints).map(([category, info]) => `
                 <section id="${category}">
-                    <h2>${category.charAt(0).toUpperCase() + category.slice(1)} Endpoints</h2>
-                    ${info.routes.map(route => `
-                        <div class="endpoint">
-                            <div>
-                                <span class="method ${route.method.toLowerCase()}">${route.method}</span>
-                                <span class="path">${info.base}${route.path}</span>
-                                ${route.auth ? '<span class="auth-badge">Requires Authentication</span>' : ''}
-                            </div>
-                            
-                            <div class="description">${route.description}</div>
-
-                            ${route.params ? `
-                                <div class="params-title">Path Parameters:</div>
-                                <pre><code>${JSON.stringify(route.params, null, 2)}</code></pre>
-                            ` : ''}
-
-                            ${route.query ? `
-                                <div class="params-title">Query Parameters:</div>
-                                <pre><code>${JSON.stringify(route.query, null, 2)}</code></pre>
-                            ` : ''}
-
-                            ${route.body ? `
-                                <div class="params-title">Request Body:</div>
-                                <pre><code>${JSON.stringify(route.body, null, 2)}</code></pre>
-                            ` : ''}
-
-                            <div class="params-title">Responses:</div>
-                            ${Object.entries(route.responses).map(([code, response]) => `
-                                <div class="response ${code.startsWith('2') ? 'success' : 'error'}">
-                                    <strong>Status: ${code}</strong>
-                                    <pre><code>${JSON.stringify(response, null, 2)}</code></pre>
-                                </div>
-                            `).join('')}
-                        </div>
-                    `).join('')}
+                    <h2>${category.charAt(0).toUpperCase() + category.slice(1)}</h2>
+                    ${info.routes.map(route => renderEndpoint(route, info.base)).join('')}
                 </section>
             `).join('')}
-        </div>
+        </main>
     </div>
-
-    <script>
-        // Smooth scrolling for anchor links
-        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
-            anchor.addEventListener('click', function (e) {
-                e.preventDefault();
-                document.querySelector(this.getAttribute('href')).scrollIntoView({
-                    behavior: 'smooth'
-                });
-            });
-        });
-    </script>
 </body>
 </html>
     `;
