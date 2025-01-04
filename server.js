@@ -18,22 +18,20 @@ class Server {
         this.port = process.env.PORT || 5000;
         this.server = null;
         this.startupTime = Date.now();
+        this.mountedRoutes = new Set();
+        this.dbConnected = false;
 
-        // Database monitoring
         this.dbHealthy = false;
         this.lastDbCheck = null;
         this.dbCheckInterval = 30000;
 
         this.initialize();
     }
-
     initialize() {
-        // Core Express configuration
         this.app.set('case sensitive routing', false);
         this.app.set('strict routing', false);
         this.app.set('trust proxy', 1);
 
-        // Setup order matters
         this.setupRequestHandling();
         this.setupSecurity();
         this.setupRoutes();
@@ -41,7 +39,6 @@ class Server {
     }
 
     setupRequestHandling() {
-        // Request tracking middleware
         this.app.use((req, res, next) => {
             req.id = crypto.randomUUID();
             req.startTime = Date.now();
@@ -57,7 +54,6 @@ class Server {
             next();
         });
 
-        // URL normalization
         this.app.use((req, res, next) => {
             req.url = req.url.toLowerCase();
             if (req.url.endsWith('/') && req.url.length > 1) {
@@ -66,13 +62,11 @@ class Server {
             next();
         });
 
-        // Database initialization
         if (this.environment !== 'test') {
             this.connectDatabase();
             this.setupDatabaseHealthCheck();
         }
 
-        // Request parsing
         this.app.use(express.json({
             limit: '10mb',
             verify: (req, res, buf) => {
@@ -111,11 +105,7 @@ class Server {
 
         this.app.use(morgan(logFormat, {
             skip: (req) => req.url === '/health',
-            stream: {
-                write: (message) => {
-                    console.log(message.trim());
-                }
-            }
+            stream: { write: (message) => console.log(message.trim()) }
         }));
     }
 
@@ -153,7 +143,6 @@ class Server {
 
         this.app.use(helmet(helmetOptions));
 
-        // Rate limiting
         const standardLimiter = rateLimit({
             windowMs: 15 * 60 * 1000,
             max: 100,
@@ -179,12 +168,11 @@ class Server {
         this.app.use('/api/', standardLimiter);
         this.app.use('/api/auth', authLimiter);
 
-        // CORS configuration
         const corsOptions = {
             origin: this.environment === 'production'
                 ? config.get('allowedOrigins')
                 : '*',
-            methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH'],
+            methods: ['GET', 'POST', 'PUT', 'DELETE'],
             allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
             exposedHeaders: [
                 'X-Request-ID',
@@ -203,20 +191,20 @@ class Server {
     setupRoutes() {
         const apiRouter = express.Router({ mergeParams: true });
 
-        // Debug middleware for API routes
-        apiRouter.use((req, res, next) => {
-            console.log('API Request:', {
-                method: req.method,
-                path: req.path,
-                originalUrl: req.originalUrl,
-                params: req.params,
-                query: req.query,
-                timestamp: new Date().toISOString()
+        if (this.environment === 'development') {
+            apiRouter.use((req, res, next) => {
+                console.log('API Request:', {
+                    method: req.method,
+                    path: req.path,
+                    originalUrl: req.originalUrl,
+                    params: req.params,
+                    query: req.query,
+                    timestamp: new Date().toISOString()
+                });
+                next();
             });
-            next();
-        });
+        }
 
-        // Configure route handlers with improved error handling
         const routeModules = {
             auth: './routes/auth',
             products: './routes/products',
@@ -227,15 +215,17 @@ class Server {
         };
 
         Object.entries(routeModules).forEach(([name, path]) => {
+            if (this.mountedRoutes.has(path)) return;
+
             try {
                 const router = require(path);
                 if (!router || typeof router !== 'function') {
                     throw new Error(`Invalid router exported from ${path}`);
                 }
                 apiRouter.use(`/${name}`, router);
-                console.log(`Successfully mounted ${name} routes from ${path}`);
+                this.mountedRoutes.add(path);
             } catch (error) {
-                console.error(`Failed to load ${name} routes from ${path}:`, error);
+                console.error(`Failed to load ${name} routes:`, error);
                 const placeholderRouter = express.Router();
                 placeholderRouter.all('*', (req, res) => {
                     res.status(503).json({
@@ -248,10 +238,8 @@ class Server {
             }
         });
 
-        // Mount API router
         this.app.use('/api', apiRouter);
 
-        // Documentation route
         this.app.get('/', (req, res) => {
             const apiInfo = getApiInfo(this.environment);
             const htmlContent = renderApiDocumentation(apiInfo);
@@ -260,10 +248,8 @@ class Server {
             res.send(htmlContent);
         });
 
-        // Health check routes
         this.setupHealthChecks();
 
-        // Catch-all route for unhandled API endpoints
         apiRouter.use('*', (req, res) => {
             res.status(404).json({
                 status: 'error',
@@ -306,7 +292,6 @@ class Server {
     }
 
     setupErrorHandling() {
-        // 404 handler
         this.app.use((req, res, next) => {
             const error = new Error(`Route ${req.url} not found`);
             error.status = 404;
@@ -314,27 +299,17 @@ class Server {
             next(error);
         });
 
-        // Global error handler
-        this.app.use((error, req, res, next) => {
-            const status = error.status || 500;
-            res.status(status).json({
-                status,
-                message: error.message,
-                error: {
-                    status: error.status || 500,
-                    statusCode: error.statusCode || error.status || 500
-                },
-                stack: this.environment === 'development' ? error.stack : undefined
-            });
-        });
+        this.app.use(errorHandler);
     }
 
-    connectDatabase() {
+    async connectDatabase() {
         if (this.environment !== 'test') {
-            connectDB().catch(error => {
+            try {
+                await connectDB();
+            } catch (error) {
                 console.error('Database connection failed:', error);
                 process.exit(1);
-            });
+            }
         }
     }
 
@@ -344,7 +319,10 @@ class Server {
 
     async checkDatabaseHealth() {
         try {
-            if (mongoose.connection.readyState !== 1) return false;
+            if (mongoose.connection.readyState !== 1) {
+                await this.connectDatabase();
+            }
+
             await mongoose.connection.db.admin().ping();
             this.dbHealthy = true;
             this.lastDbCheck = new Date().toISOString();
