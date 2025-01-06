@@ -1,6 +1,8 @@
 const express = require('express');
 const mongoose = require('mongoose');
 const Shipment = require('../models/Shipment');
+const auth = require('../middleware/auth');
+const Order = require('../models/Order');
 const router = express.Router();
 
 // Get all shipments with filtering
