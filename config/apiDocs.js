@@ -32,11 +32,11 @@ const getApiInfo = (environment) => {
                 getAllOrders: 'GET /',
                 getOrder: 'GET /:id',
                 createOrder: 'POST /',
-                updateOrderStatus: 'PATCH /:id/status'
+                updateOrderStatus: 'PUT /:id/status'
             },
             shipments: {
                 createShipment: 'POST /',
-                updateShipment: 'PATCH /:id',
+                updateShipment: 'PUT /:id',
                 getShipment: 'GET /:id',
                 getShipments: 'GET /'
             },

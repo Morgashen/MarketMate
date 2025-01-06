@@ -52,7 +52,7 @@ The shipping system tracks order fulfillment and delivery with features for:
 - **Database**: MongoDB with Mongoose ODM
 - **Authentication**: JWT (JSON Web Tokens)
 - **Payment Processing**: Stripe API
-- **Testing**: Jest with Supertest
+- **Testing**: Postman for API testing
 - **Security**: Helmet.js for HTTP headers
 - **API Documentation**: Built-in interactive documentation
 
