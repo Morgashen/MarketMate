@@ -1,4 +1,3 @@
-// models/Shipment.js
 const mongoose = require('mongoose');
 
 const shipmentEventSchema = new mongoose.Schema({
