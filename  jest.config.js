@@ -1,10 +1,24 @@
 module.exports = {
+    testEnvironment: 'node',
+    verbose: true,
+    coverageDirectory: 'coverage',
+    collectCoverageFrom: [
+        'routes/**/*.js',
+        'models/**/*.js',
+        'middleware/**/*.js',
+        'utils/**/*.js',
+        '!**/node_modules/**'
+    ],
+    testMatch: ['**/tests/**/*.js'],
+    setupFilesAfterEnv: ['./jest.setup.js'],
+    testPathIgnorePatterns: ['/node_modules/'],
     transform: {
-        "^.+\\.[tj]sx?$": "babel-jest", // Use Babel to transform test files
+        '^.+\\.js$': 'babel-jest'
     },
     transformIgnorePatterns: [
-        "/node_modules/(?!chai|chai-http)", // Transform ES Modules in chai and chai-http
+        'node_modules/(?!(mongoose|express)/)'
     ],
-    testEnvironment: "node", // Use Node.js environment for tests
-    moduleFileExtensions: ["js", "jsx", "json", "node"],
-};  
+    moduleNameMapper: {
+        '^@/(.*)$': '<rootDir>/$1'
+    }
+};
