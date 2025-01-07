@@ -11,7 +11,14 @@ const connectDB = require('./config/db');
 const { getApiInfo, renderApiDocumentation } = require('./utils/documentation');
 const { errorHandler } = require('./middleware/errorHandler');
 
+/**
+ * Server class that handles all aspects of the Express application
+ * Including middleware setup, routing, database connection, and error handling
+ */
 class Server {
+    /**
+     * Initialize server instance with default configuration
+     */
     constructor() {
         this.app = express();
         this.environment = process.env.NODE_ENV || 'development';
@@ -21,16 +28,21 @@ class Server {
         this.mountedRoutes = new Set();
         this.dbConnected = false;
 
+        // Database health monitoring properties
         this.dbHealthy = false;
         this.lastDbCheck = null;
-        this.dbCheckInterval = 30000;
+        this.dbCheckInterval = 30000; // Check DB health every 30 seconds
 
         this.initialize();
     }
+
+    /**
+     * Configure initial server settings and setup all middleware
+     */
     initialize() {
         this.app.set('case sensitive routing', false);
         this.app.set('strict routing', false);
-        this.app.set('trust proxy', 1);
+        this.app.set('trust proxy', 1); // Required for rate limiting behind reverse proxy
 
         this.setupRequestHandling();
         this.setupSecurity();
@@ -38,11 +50,16 @@ class Server {
         this.setupErrorHandling();
     }
 
+    /**
+     * Configure request processing middleware and JSON parsing
+     */
     setupRequestHandling() {
+        // Add unique request ID and timing information to each request
         this.app.use((req, res, next) => {
             req.id = crypto.randomUUID();
             req.startTime = Date.now();
 
+            // Extend response.send to include timing headers
             const originalSend = res.send;
             res.send = function (...args) {
                 if (!res.headersSent) {
@@ -54,6 +71,7 @@ class Server {
             next();
         });
 
+        // Normalize URLs to lowercase and remove trailing slashes
         this.app.use((req, res, next) => {
             req.url = req.url.toLowerCase();
             if (req.url.endsWith('/') && req.url.length > 1) {
@@ -62,11 +80,13 @@ class Server {
             next();
         });
 
+        // Connect to database except in test environment
         if (this.environment !== 'test') {
             this.connectDatabase();
             this.setupDatabaseHealthCheck();
         }
 
+        // Configure JSON body parsing with size limits and validation
         this.app.use(express.json({
             limit: '10mb',
             verify: (req, res, buf) => {
@@ -89,27 +109,38 @@ class Server {
         this.setupLogging();
     }
 
+    /**
+     * Configure request logging with Morgan
+     * Includes custom tokens for request ID and sanitized request body
+     */
     setupLogging() {
         morgan.token('reqId', (req) => req.id);
         morgan.token('body', (req) => {
             const sanitizedBody = { ...req.body };
+            // Remove sensitive information from logs
             ['password', 'token', 'apiKey', 'secret'].forEach(key => {
                 if (sanitizedBody[key]) sanitizedBody[key] = '****';
             });
             return JSON.stringify(sanitizedBody);
         });
 
+        // Use different log formats for development and production
         const logFormat = this.environment === 'development'
             ? ':reqId :method :url :status :response-time ms - :body'
             : ':reqId :remote-addr - :remote-user [:date[clf]] ":method :url HTTP/:http-version" :status :res[content-length]';
 
+        // Skip logging health check endpoints
         this.app.use(morgan(logFormat, {
             skip: (req) => req.url === '/health',
             stream: { write: (message) => console.log(message.trim()) }
         }));
     }
 
+    /**
+     * Configure security middleware including Helmet, rate limiting, and CORS
+     */
     setupSecurity() {
+        // Configure Helmet security headers
         const helmetOptions = {
             contentSecurityPolicy: {
                 directives: {
@@ -124,6 +155,7 @@ class Server {
                     frameSrc: ["'none'"]
                 }
             },
+            // Additional security headers
             crossOriginEmbedderPolicy: true,
             crossOriginOpenerPolicy: true,
             crossOriginResourcePolicy: { policy: "same-site" },
@@ -143,9 +175,10 @@ class Server {
 
         this.app.use(helmet(helmetOptions));
 
+        // Configure rate limiting for general API endpoints
         const standardLimiter = rateLimit({
-            windowMs: 15 * 60 * 1000,
-            max: 100,
+            windowMs: 15 * 60 * 1000, // 15 minutes
+            max: 100, // Limit each IP to 100 requests per windowMs
             standardHeaders: true,
             legacyHeaders: false,
             message: {
@@ -154,9 +187,10 @@ class Server {
             }
         });
 
+        // Stricter rate limiting for authentication endpoints
         const authLimiter = rateLimit({
             windowMs: 15 * 60 * 1000,
-            max: 5,
+            max: 5, // Limit each IP to 5 authentication attempts per windowMs
             standardHeaders: true,
             legacyHeaders: false,
             message: {
@@ -168,6 +202,7 @@ class Server {
         this.app.use('/api/', standardLimiter);
         this.app.use('/api/auth', authLimiter);
 
+        // Configure CORS settings
         const corsOptions = {
             origin: this.environment === 'production'
                 ? config.get('allowedOrigins')
@@ -182,15 +217,19 @@ class Server {
                 'X-RateLimit-Reset'
             ],
             credentials: true,
-            maxAge: 600
+            maxAge: 600 // Cache preflight requests for 10 minutes
         };
 
         this.app.use(cors(corsOptions));
     }
 
+    /**
+     * Set up API routes and documentation endpoints
+     */
     setupRoutes() {
         const apiRouter = express.Router({ mergeParams: true });
 
+        // Add request logging in development environment
         if (this.environment === 'development') {
             apiRouter.use((req, res, next) => {
                 console.log('API Request:', {
@@ -205,6 +244,7 @@ class Server {
             });
         }
 
+        // Define available route modules
         const routeModules = {
             auth: './routes/auth',
             products: './routes/products',
@@ -214,6 +254,7 @@ class Server {
             payments: './routes/payments'
         };
 
+        // Dynamically load and mount route modules
         Object.entries(routeModules).forEach(([name, path]) => {
             if (this.mountedRoutes.has(path)) return;
 
@@ -226,6 +267,7 @@ class Server {
                 this.mountedRoutes.add(path);
             } catch (error) {
                 console.error(`Failed to load ${name} routes:`, error);
+                // Create placeholder router for failed modules
                 const placeholderRouter = express.Router();
                 placeholderRouter.all('*', (req, res) => {
                     res.status(503).json({
@@ -240,6 +282,7 @@ class Server {
 
         this.app.use('/api', apiRouter);
 
+        // Serve API documentation at root
         this.app.get('/', (req, res) => {
             const apiInfo = getApiInfo(this.environment);
             const htmlContent = renderApiDocumentation(apiInfo);
@@ -250,6 +293,7 @@ class Server {
 
         this.setupHealthChecks();
 
+        // Handle 404 for unknown API endpoints
         apiRouter.use('*', (req, res) => {
             res.status(404).json({
                 status: 'error',
@@ -259,7 +303,11 @@ class Server {
         });
     }
 
+    /**
+     * Set up health check endpoints for monitoring
+     */
     setupHealthChecks() {
+        // Detailed health check endpoint
         this.app.get('/health', async (req, res) => {
             try {
                 const dbStatus = await this.checkDatabaseHealth();
@@ -288,10 +336,15 @@ class Server {
             }
         });
 
+        // Simple ping endpoint for basic availability checks
         this.app.get('/ping', (_, res) => res.status(200).send('pong'));
     }
 
+    /**
+     * Configure global error handling middleware
+     */
     setupErrorHandling() {
+        // Handle 404 errors for unknown routes
         this.app.use((req, res, next) => {
             const error = new Error(`Route ${req.url} not found`);
             error.status = 404;
@@ -299,9 +352,13 @@ class Server {
             next(error);
         });
 
+        // Use custom error handler middleware
         this.app.use(errorHandler);
     }
 
+    /**
+     * Establish database connection
+     */
     async connectDatabase() {
         if (this.environment !== 'test') {
             try {
@@ -313,10 +370,17 @@ class Server {
         }
     }
 
+    /**
+     * Set up periodic database health checks
+     */
     setupDatabaseHealthCheck() {
         setInterval(() => this.checkDatabaseHealth(), this.dbCheckInterval);
     }
 
+    /**
+     * Check database connection health
+     * @returns {Promise<boolean>} Database health status
+     */
     async checkDatabaseHealth() {
         try {
             if (mongoose.connection.readyState !== 1) {
@@ -334,6 +398,10 @@ class Server {
         }
     }
 
+    /**
+     * Measure database response time
+     * @returns {Promise<number|null>} Response time in milliseconds or null if check fails
+     */
     async checkDbLatency() {
         if (mongoose.connection.readyState !== 1) return null;
         const start = Date.now();
@@ -346,6 +414,10 @@ class Server {
         }
     }
 
+    /**
+     * Start the server
+     * @returns {Promise<http.Server|Express>} Server instance
+     */
     async start() {
         return new Promise((resolve, reject) => {
             try {
@@ -369,38 +441,21 @@ class Server {
         });
     }
 
-    async gracefulShutdown(signal) {
-        console.log(`\n${signal} received. Starting graceful shutdown...`);
+} // End of Server class
 
-        try {
-            if (this.server) {
-                await new Promise((resolve) => {
-                    this.server.close(resolve);
-                });
-                console.log('Server closed successfully');
-            }
-
-            if (mongoose.connection.readyState === 1) {
-                await mongoose.connection.close();
-                console.log('Database connection closed successfully');
-            }
-
-            console.log('Graceful shutdown completed');
-            process.exit(0);
-        } catch (error) {
-            console.error('Error during graceful shutdown:', error);
-            process.exit(1);
-        }
-    }
-}
-
+/**
+ * Factory function to create a new server instance
+ * @returns {Object} Object containing server instance, app, and control methods
+ */
 const createServer = () => {
     try {
+        // Create new server instance
         const server = new Server();
+
+        // Return server instance and control methods
         return {
             app: server.app,
             start: () => server.start(),
-            stop: () => server.gracefulShutdown('MANUAL_STOP'),
             server
         };
     } catch (error) {
@@ -409,12 +464,17 @@ const createServer = () => {
     }
 };
 
+// Start the server automatically if not in test environment
 if (process.env.NODE_ENV !== 'test') {
+    // Get start method from server instance
     const { start } = createServer();
+
+    // Start the server and handle any startup errors
     start().catch(error => {
         console.error('Failed to start server:', error);
         process.exit(1);
     });
 }
 
+// Export server instance for use in other parts of the application
 module.exports = createServer();
