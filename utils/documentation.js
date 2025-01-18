@@ -19,7 +19,7 @@ const getApiInfo = (environment) => {
                             name: 'string (required)'
                         },
                         responses: {
-                            200: {
+                            201: {
                                 success: true,
                                 data: { token: 'JWT Token' }
                             },

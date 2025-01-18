@@ -6,6 +6,9 @@ const helmet = require('helmet');
 const morgan = require('morgan');
 const mongoose = require('mongoose');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
+const favicon = require('serve-favicon');
+const dbManager = require('./config/db-connection-manager');
 const crypto = require('crypto');
 const connectDB = require('./config/db');
 const { getApiInfo, renderApiDocumentation } = require('./utils/documentation');
@@ -24,6 +27,7 @@ class Server {
         this.environment = process.env.NODE_ENV || 'development';
         this.port = process.env.PORT || 5000;
         this.server = null;
+        this.dbManager = dbManager;
         this.startupTime = Date.now();
         this.mountedRoutes = new Set();
         this.dbConnected = false;
@@ -35,7 +39,11 @@ class Server {
 
         this.initialize();
     }
-
+    async connectDatabase() {
+        if (this.environment !== 'test') {
+            await this.dbManager.connect();
+        }
+    }
     /**
      * Configure initial server settings and setup all middleware
      */
@@ -307,30 +315,37 @@ class Server {
      * Set up health check endpoints for monitoring
      */
     setupHealthChecks() {
-        // Detailed health check endpoint
         this.app.get('/health', async (req, res) => {
             try {
-                const dbStatus = await this.checkDatabaseHealth();
+                const dbHealth = await this.dbManager.checkHealth();
                 const uptime = Date.now() - this.startupTime;
 
-                res.status(dbStatus ? 200 : 503).json({
-                    status: dbStatus ? 'healthy' : 'degraded',
+                const healthStatus = {
+                    status: dbHealth.status === 'connected' ? 'healthy' : 'degraded',
                     timestamp: new Date().toISOString(),
                     environment: this.environment,
                     uptime,
                     services: {
                         database: {
-                            status: dbStatus ? 'connected' : 'disconnected',
-                            lastCheck: this.lastDbCheck,
-                            latency: await this.checkDbLatency()
+                            status: dbHealth.status,
+                            latency: dbHealth.latency,
+                            poolSize: dbHealth.poolSize,
+                            lastError: dbHealth.lastError,
+                            retryAttempt: dbHealth.retryAttempt
                         }
                     }
-                });
+                };
+
+                const httpStatus = dbHealth.status === 'connected' ? 200 : 503;
+                res.status(httpStatus).json(healthStatus);
+
             } catch (error) {
                 console.error('Health check failed:', error);
+
                 res.status(500).json({
                     status: 'error',
                     message: 'Error checking system health',
+                    timestamp: new Date().toISOString(),
                     error: this.environment === 'development' ? error.message : undefined
                 });
             }
@@ -351,6 +366,16 @@ class Server {
             error.statusCode = 404;
             next(error);
         });
+
+        try {
+            this.app.use(favicon(path.join(__dirname, 'public', 'favicon.ico')));
+        } catch (error) {
+            // Fallback handler if favicon.ico is not found
+            this.app.get('/favicon.ico', (req, res) => {
+                res.status(204).end();
+            });
+            console.warn('Favicon not found in public directory, using default handler');
+        }
 
         // Use custom error handler middleware
         this.app.use(errorHandler);
