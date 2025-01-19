@@ -335,81 +335,196 @@ const getApiInfo = (environment) => {
                     {
                         path: '/',
                         method: 'GET',
-                        description: 'Get shipments for user\'s orders',
+                        description: 'Get all shipments with filtering and pagination',
                         auth: true,
                         query: {
-                            orderId: 'string',
-                            status: 'string'
+                            page: 'number (default: 1)',
+                            limit: 'number (default: 10)',
+                            carrier: 'string (filter by carrier)',
+                            status: 'string (filter by status)',
+                            fromDate: 'date (filter from date)',
+                            toDate: 'date (filter to date)'
                         },
                         responses: {
                             200: {
-                                success: true,
-                                data: 'Array of shipments'
+                                status: 'success',
+                                data: {
+                                    shipments: [{
+                                        id: 'string',
+                                        orderId: 'string',
+                                        carrier: 'string',
+                                        trackingNumber: 'string',
+                                        status: 'string',
+                                        shippingAddress: 'object',
+                                        estimatedDeliveryDate: 'date',
+                                        createdAt: 'date'
+                                    }],
+                                    pagination: {
+                                        currentPage: 'number',
+                                        totalPages: 'number',
+                                        totalItems: 'number',
+                                        itemsPerPage: 'number'
+                                    }
+                                }
                             },
-                            401: { message: 'Not authorized' },
-                            500: { message: 'Internal server error' }
+                            500: {
+                                status: 'error',
+                                message: 'Failed to fetch shipments'
+                            }
                         }
                     },
                     {
-                        path: '/:id',
+                        path: '/:shipmentId',
                         method: 'GET',
-                        description: 'Get shipment by ID',
+                        description: 'Get shipment details by ID',
                         auth: true,
                         params: {
-                            id: 'string (shipment ID)'
+                            shipmentId: 'string (MongoDB ObjectId)'
                         },
                         responses: {
                             200: {
-                                success: true,
+                                status: 'success',
                                 data: 'Shipment object'
                             },
-                            401: { message: 'Not authorized' },
-                            404: { message: 'Shipment not found' },
-                            500: { message: 'Internal server error' }
+                            400: {
+                                status: 'error',
+                                message: 'Invalid shipment ID format'
+                            },
+                            404: {
+                                status: 'error',
+                                message: 'Shipment not found'
+                            },
+                            500: {
+                                status: 'error',
+                                message: 'Failed to fetch shipment details'
+                            }
                         }
                     },
                     {
-                        path: '/:id',
-                        method: 'PUT',
-                        description: 'Update shipment status',
+                        path: '/orders/:orderId',
+                        method: 'GET',
+                        description: 'Get all shipments for a specific order',
                         auth: true,
                         params: {
-                            id: 'string (shipment ID)'
+                            orderId: 'string (MongoDB ObjectId)'
+                        },
+                        responses: {
+                            200: {
+                                status: 'success',
+                                data: {
+                                    shipments: 'Array of shipment objects'
+                                }
+                            },
+                            400: {
+                                status: 'error',
+                                message: 'Invalid order ID format'
+                            },
+                            500: {
+                                status: 'error',
+                                message: 'Failed to fetch order shipments'
+                            }
+                        }
+                    },
+                    {
+                        path: '/tracking/:trackingNumber',
+                        method: 'GET',
+                        description: 'Get shipment tracking information',
+                        auth: true,
+                        params: {
+                            trackingNumber: 'string'
+                        },
+                        responses: {
+                            200: {
+                                status: 'success',
+                                data: {
+                                    trackingNumber: 'string',
+                                    carrier: 'string',
+                                    status: 'string',
+                                    estimatedDeliveryDate: 'date',
+                                    events: 'array',
+                                    lastUpdated: 'date'
+                                }
+                            },
+                            404: {
+                                status: 'error',
+                                message: 'Tracking number not found'
+                            },
+                            500: {
+                                status: 'error',
+                                message: 'Failed to fetch tracking information'
+                            }
+                        }
+                    },
+                    {
+                        path: '/order/:orderId',
+                        method: 'POST',
+                        description: 'Create shipment for an order with payment confirmation',
+                        auth: true,
+                        params: {
+                            orderId: 'string (MongoDB ObjectId)'
                         },
                         body: {
-                            status: 'string (required)',
-                            trackingNumber: 'string',
-                            carrier: 'string',
-                            estimatedDelivery: 'date'
+                            paymentMethodId: 'string (required)',
+                            paymentIntentId: 'string (required)'
                         },
                         responses: {
-                            200: {
-                                success: true,
-                                data: 'Updated shipment object'
+                            201: {
+                                status: 'success',
+                                message: 'Shipment created successfully',
+                                data: {
+                                    shipment: {
+                                        id: 'string',
+                                        status: 'string',
+                                        orderId: 'string'
+                                    }
+                                }
                             },
-                            400: { message: 'Validation errors' },
-                            401: { message: 'Not authorized' },
-                            404: { message: 'Shipment not found' },
-                            500: { message: 'Internal server error' }
+                            400: {
+                                status: 'error',
+                                message: 'Invalid order ID format'
+                            },
+                            404: {
+                                status: 'error',
+                                message: 'Order not found'
+                            },
+                            500: {
+                                status: 'error',
+                                message: 'Internal server error'
+                            }
                         }
                     },
                     {
-                        path: '/:id',
-                        method: 'DELETE',
-                        description: 'Cancel shipment',
+                        path: '/orders',
+                        method: 'POST',
+                        description: 'Create shipment with tracking details',
                         auth: true,
-                        params: {
-                            id: 'string (shipment ID)'
+                        body: {
+                            orderId: 'string (required)',
+                            carrier: 'string (required)',
+                            trackingNumber: 'string (required)',
+                            shippingAddress: {
+                                street: 'string (required)',
+                                city: 'string (required)',
+                                state: 'string (required)',
+                                zipCode: 'string (required)',
+                                country: 'string (required)'
+                            },
+                            estimatedDeliveryDate: 'date (optional)'
                         },
                         responses: {
-                            200: {
-                                success: true,
-                                message: 'Shipment cancelled'
+                            201: {
+                                status: 'success',
+                                message: 'Shipment created successfully',
+                                data: 'Shipment object'
                             },
-                            400: { message: 'Shipment cannot be cancelled' },
-                            401: { message: 'Not authorized' },
-                            404: { message: 'Shipment not found' },
-                            500: { message: 'Internal server error' }
+                            400: {
+                                status: 'error',
+                                message: 'Missing required fields or Invalid order ID format or Tracking number already exists'
+                            },
+                            500: {
+                                status: 'error',
+                                message: 'Failed to create shipment'
+                            }
                         }
                     }
                 ]

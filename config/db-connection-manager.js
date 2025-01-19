@@ -15,30 +15,72 @@ class DatabaseConnectionManager {
     }
 
     initializeConnectionOptions() {
+        // Options specifically tuned for MongoDB Atlas
         this.connectionOptions = {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
-            serverSelectionTimeoutMS: 5000,
-            heartbeatFrequencyMS: 10000,
+            // Replica set options
+            replicaSet: 'atlas-nmutqk-shard-0',
+            directConnection: false,
+
+            // Connection timeout settings
+            serverSelectionTimeoutMS: 30000,  // Increased from 5000
             socketTimeoutMS: 45000,
+            connectTimeoutMS: 30000,
+
+            // Read preference and write concern
+            readPreference: 'primary',
+            w: 'majority',
+            retryWrites: true,
+
+            // Pool configuration
             maxPoolSize: 10,
             minPoolSize: 2,
-            maxIdleTimeMS: 30000,
-            keepAlive: true,
-            connectTimeoutMS: 30000,
+
+            // Monitoring
+            heartbeatFrequencyMS: 10000,
+
+            // SSL requirements for Atlas
+            ssl: true,
+            tls: true,
+            tlsInsecure: false,
+
+            // Additional options
+            authSource: 'admin',
+            retryReads: true
         };
     }
 
     setupEventListeners() {
-        mongoose.connection.on('error', this.handleError.bind(this));
-        mongoose.connection.on('disconnected', this.handleDisconnect.bind(this));
+        mongoose.connection.on('disconnected', () => {
+            console.log('MongoDB disconnected event received');
+            this.isConnecting = false;
+            if (!this.isConnecting && this.currentRetry < this.maxRetries) {
+                setTimeout(() => this.handleDisconnect(), 5000);  // Wait 5s before reconnecting
+            }
+        });
+
+        mongoose.connection.on('error', (error) => {
+            const errorInfo = {
+                message: error.message,
+                code: error.code,
+                time: new Date().toISOString(),
+                topology: error.topology?.type
+            };
+            console.error('MongoDB connection error:', errorInfo);
+            this.handleError(error);
+        });
+
         mongoose.connection.on('connected', () => {
             console.log('MongoDB connected successfully');
             this.lastError = null;
             this.currentRetry = 0;
+            this.isConnecting = false;
         });
+
         mongoose.connection.on('reconnected', () => {
+            console.log('MongoDB reconnected successfully');
             this.lastError = null;
+            this.currentRetry = 0;
+            this.isConnecting = false;
         });
     }
 
@@ -58,26 +100,58 @@ class DatabaseConnectionManager {
                 throw new Error('MongoDB URI not provided');
             }
 
-            console.log('Attempting MongoDB connection...');
+            // Validate URI format
+            if (!uri.includes('mongodb+srv://') && !uri.includes('mongodb://')) {
+                throw new Error('Invalid MongoDB URI format');
+            }
+
+            console.log('Attempting MongoDB Atlas connection...');
             await mongoose.connect(uri, this.connectionOptions);
 
             const connectionTime = Date.now() - this.connectionStartTime;
             console.log(`MongoDB connected successfully (${connectionTime}ms)`);
 
-            this.currentRetry = 0;
-            this.isConnecting = false;
-
             this.setupConnectionMonitoring();
 
         } catch (error) {
             this.lastError = error;
+
+            // Log detailed error information
             console.error('MongoDB connection error:', {
                 message: error.message,
                 code: error.code,
-                time: new Date().toISOString()
+                time: new Date().toISOString(),
+                cause: error.cause?.message,
+                topology: error.topology?.type
             });
 
             await this.handleConnectionFailure(error);
+        }
+    }
+
+    handleError(error) {
+        this.lastError = error;
+
+        // Handle specific Atlas-related errors
+        if (error.name === 'MongoServerSelectionError') {
+            console.log('Server selection error, waiting before retry...');
+            setTimeout(() => {
+                if (!this.isConnecting) {
+                    this.handleDisconnect();
+                }
+            }, 10000); // Wait 10s before retry for server selection issues
+            return;
+        }
+
+        if (error.code === 'ECONNREFUSED' ||
+            error.message.includes('topology') ||
+            error.message.includes('disconnected')) {
+
+            setTimeout(() => {
+                if (!this.isConnecting) {
+                    this.handleDisconnect();
+                }
+            }, 5000);
         }
     }
 
@@ -93,7 +167,8 @@ class DatabaseConnectionManager {
                 attempt: this.currentRetry,
                 maxRetries: this.maxRetries,
                 delayMs: delay,
-                error: error.message
+                error: error.message,
+                topology: error.topology?.type
             });
 
             setTimeout(() => this.connect(), delay);
@@ -102,10 +177,9 @@ class DatabaseConnectionManager {
                 message: 'Max connection retries reached',
                 totalAttempts: this.maxRetries,
                 lastError: error.message,
-                timeSinceFirstAttempt: Date.now() - this.connectionStartTime
+                timeSinceFirstAttempt: Date.now() - this.connectionStartTime,
+                topology: error.topology?.type
             });
-
-            throw new Error('Failed to establish database connection');
         }
     }
 
@@ -120,45 +194,6 @@ class DatabaseConnectionManager {
         return Math.floor(exponentialDelay + jitter);
     }
 
-    handleError(error) {
-        this.lastError = error;
-
-        const errorInfo = {
-            message: error.message,
-            code: error.code,
-            time: new Date().toISOString(),
-            connectionState: mongoose.connection.readyState
-        };
-
-        console.error('MongoDB error:', errorInfo);
-
-        switch (error.code) {
-            case 'ECONNRESET':
-                console.log('Connection reset detected, initiating reconnection...');
-                this.handleDisconnect();
-                break;
-
-            case 'ETIMEDOUT':
-                console.log('Connection timed out, waiting before reconnecting...');
-                setTimeout(() => this.handleDisconnect(), 5000);
-                break;
-
-            default:
-                if (error.message.includes('topology')) {
-                    console.log('Topology error detected, attempting to reconnect...');
-                    this.handleDisconnect();
-                }
-        }
-    }
-
-    handleDisconnect() {
-        if (!this.isConnecting) {
-            console.log('MongoDB disconnected, initiating reconnection...');
-            this.currentRetry = 0;
-            this.connect();
-        }
-    }
-
     setupConnectionMonitoring() {
         const MONITOR_INTERVAL = 30000;
 
@@ -168,24 +203,18 @@ class DatabaseConnectionManager {
 
                 if (health.status !== 'connected') {
                     console.warn('Unhealthy connection detected:', health);
-                    await this.handleConnectionFailure(
-                        new Error(`Unhealthy connection: ${health.status}`)
-                    );
-                }
-
-                // Get connection stats safely
-                const client = mongoose.connection.client;
-                if (client && client.topology) {
-                    const stats = {
-                        connections: client.topology.connections().length,
-                        time: new Date().toISOString()
-                    };
-                    console.log('Connection stats:', stats);
+                    if (!this.isConnecting) {
+                        await this.handleConnectionFailure(
+                            new Error(`Unhealthy connection: ${health.status}`)
+                        );
+                    }
                 }
 
             } catch (error) {
                 console.error('Health check failed:', error);
-                await this.handleConnectionFailure(error);
+                if (!this.isConnecting) {
+                    await this.handleConnectionFailure(error);
+                }
             }
         }, MONITOR_INTERVAL);
     }
@@ -198,7 +227,8 @@ class DatabaseConnectionManager {
                 status: 'disconnected',
                 readyState,
                 lastError: this.lastError?.message,
-                retryAttempt: this.currentRetry
+                retryAttempt: this.currentRetry,
+                topology: mongoose.connection.client?.topology?.description?.type
             };
         }
 
@@ -207,18 +237,11 @@ class DatabaseConnectionManager {
             await mongoose.connection.db.admin().ping();
             const latency = Date.now() - startTime;
 
-            // Get connection count safely
-            let connectionCount = 0;
-            const client = mongoose.connection.client;
-            if (client && client.topology) {
-                connectionCount = client.topology.connections().length;
-            }
-
             return {
                 status: 'connected',
                 latency,
-                connections: connectionCount,
                 readyState,
+                topology: mongoose.connection.client?.topology?.description?.type,
                 lastError: null
             };
         } catch (error) {
@@ -227,6 +250,7 @@ class DatabaseConnectionManager {
                 error: error.message,
                 code: error.code,
                 readyState,
+                topology: mongoose.connection.client?.topology?.description?.type,
                 lastError: error
             };
         }
